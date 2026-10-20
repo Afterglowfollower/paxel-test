@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Independent project-level AI coding history analyzer.
 
 Reads local Codex and Claude JSONL, links sessions to one workspace, records a

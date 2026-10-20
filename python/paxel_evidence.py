@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Local evidence enrichers for the source-guided Paxel reproduction.
 
 All Git inspection is local. PR diffs are read from an explicit directory or
@@ -11,6 +12,7 @@ import re
 import subprocess
 
 import project_analyzer as base
+import prompt_profiles as profiles
 
 
 # Candidate boundaries observed with REA against the original client. These
@@ -147,7 +149,43 @@ def decision_candidates(session):
     return candidates
 
 
-def classify_decisions(candidates, key, model, endpoint, caller):
+def _apply_decision(candidate, response):
+    if not response or not isinstance(response.get("is_decision"), bool):
+        return
+    candidate["classification"] = "confirmed" if response["is_decision"] else "rejected"
+    kind = response.get("decision_type")
+    candidate["decision_type"] = kind if kind in {
+        "strategic_redirect", "technical_catch", "product_insight", "option_selection"} else None
+    candidate["decision_narrative"] = str(response.get("narrative") or "")[:300]
+    confidence = response.get("confidence")
+    candidate["decision_confidence"] = confidence if confidence in {"high", "medium", "low"} else "low"
+    law_key = response.get("law_key")
+    if isinstance(law_key, str) and law_key:
+        candidate["law_key"] = law_key
+
+
+def _classify_decisions_v15(candidates, key, model, endpoint, caller, prompts):
+    """Official v5 classifier: text exchanges in, JSON array out."""
+    classified = [dict(candidate) for candidate in candidates]
+    for start in range(0, len(classified), 20):
+        batch = classified[start:start + 20]
+        raw = caller(prompts["decision"], profiles.decision_user_message(batch), key, model, endpoint)
+        parsed = profiles.parse_decision_array(raw)
+        by_index = {}
+        for position, item in enumerate(parsed):
+            index = item.get("index")
+            if isinstance(index, int) and 0 <= index < len(batch):
+                by_index[index] = item
+            elif position < len(batch):
+                by_index.setdefault(position, item)
+        for index, candidate in enumerate(batch):
+            _apply_decision(candidate, by_index.get(index))
+    return classified
+
+
+def classify_decisions(candidates, key, model, endpoint, caller, profile="local", prompts=None):
+    if profile == "v15-v5":
+        return _classify_decisions_v15(candidates, key, model, endpoint, caller, prompts or {})
     classified = [dict(candidate) for candidate in candidates]
     for start in range(0, len(classified), 20):
         batch = classified[start:start + 20]
@@ -157,16 +195,7 @@ def classify_decisions(candidates, key, model, endpoint, caller):
         answer = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip()))
         items = {item.get("id"): item for item in answer.get("items", []) if isinstance(item, dict)}
         for candidate in batch:
-            response = items.get(candidate["id"])
-            if not response or not isinstance(response.get("is_decision"), bool):
-                continue
-            candidate["classification"] = "confirmed" if response["is_decision"] else "rejected"
-            kind = response.get("decision_type")
-            candidate["decision_type"] = kind if kind in {
-                "strategic_redirect", "technical_catch", "product_insight", "option_selection"} else None
-            candidate["decision_narrative"] = str(response.get("narrative") or "")[:300]
-            confidence = response.get("confidence")
-            candidate["decision_confidence"] = confidence if confidence in {"high", "medium", "low"} else "low"
+            _apply_decision(candidate, items.get(candidate["id"]))
     return classified
 
 

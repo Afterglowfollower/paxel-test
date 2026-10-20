@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Source-guided reproduction of three public Paxel client stages.
 
 This independent implementation follows the public pipeline structure but is
@@ -20,6 +21,7 @@ from urllib import request
 import project_analyzer as base
 import multi_agent_sources as multi
 import paxel_evidence as extra
+import prompt_profiles as profiles
 
 
 VERSION = "reproduction.v1"
@@ -290,22 +292,43 @@ def parse_narrative(text):
     return narrative, intent
 
 
-def narrate_session(session, key, model, endpoint, caller=None):
+def narrate_session(session, key, model, endpoint, caller=None, profile="local", prompts=None):
     caller = caller or glm_text
     parts = transcript_parts(session)
     if not parts:
         return {"status": "no_evidence", "narrative": None, "intent": None, "parts": 0}
     notes = []
-    for index, part in enumerate(parts):
-        context = f"Session {session['id']} · project cwd {session['cwd']} · part {index+1}/{len(parts)}\n\n{part}"
-        notes.append(caller(NARRATIVE_PROMPT, fenced(context), key, model, endpoint))
-    while len(notes) > 1:
-        merged = []
-        for index in range(0, len(notes), 3):
-            group = notes[index:index + 3]
-            merged.append(group[0] if len(group) == 1 else
-                          caller(MERGE_PROMPT, fenced("\n\n---\n\n".join(group)), key, model, endpoint))
-        notes = merged
+    if profile == "v15-v5":
+        prompts = prompts or {}
+        metadata = profiles.session_metadata(session)
+        for index, part in enumerate(parts):
+            label = metadata if len(parts) == 1 else metadata + f"\nPart {index+1} of {len(parts)}."
+            notes.append(caller(prompts["narrative"],
+                                profiles.narrative_user_message(label, part),
+                                key, model, endpoint))
+        # The v5 merge prompt is pairwise; keep the official shape.
+        while len(notes) > 1:
+            merged = []
+            for index in range(0, len(notes), 2):
+                group = notes[index:index + 2]
+                if len(group) == 1:
+                    merged.append(group[0])
+                else:
+                    merged.append(caller(prompts["merge"],
+                                         f"Notes A:\n{group[0]}\n\nNotes B:\n{group[1]}",
+                                         key, model, endpoint))
+            notes = merged
+    else:
+        for index, part in enumerate(parts):
+            context = f"Session {session['id']} · project cwd {session['cwd']} · part {index+1}/{len(parts)}\n\n{part}"
+            notes.append(caller(NARRATIVE_PROMPT, fenced(context), key, model, endpoint))
+        while len(notes) > 1:
+            merged = []
+            for index in range(0, len(notes), 3):
+                group = notes[index:index + 3]
+                merged.append(group[0] if len(group) == 1 else
+                              caller(MERGE_PROMPT, fenced("\n\n---\n\n".join(group)), key, model, endpoint))
+            notes = merged
     output = notes[0]
     narrative, intent = parse_narrative(output)
     return {"status": "generated", "narrative": narrative, "intent": intent,
@@ -344,11 +367,14 @@ def episode_input(episode, groups, sessions, narratives, decisions=None, reviews
     return data
 
 
-def score_episode(data, key, model, endpoint, caller=None):
+def score_episode(data, key, model, endpoint, caller=None, profile="local", prompts=None):
     caller = caller or glm_text
     if not any(s["narrative"] for s in data["sessions"]):
         return {"status": "skipped_no_narrative", "scores": {axis: None for axis in AXES}}
-    raw = caller(SCORING_PROMPT, fenced(json.dumps(data, ensure_ascii=False)), key, model, endpoint)
+    if profile == "v15-v5":
+        raw = caller((prompts or {})["scoring"], profiles.episode_user_message(data), key, model, endpoint)
+    else:
+        raw = caller(SCORING_PROMPT, fenced(json.dumps(data, ensure_ascii=False)), key, model, endpoint)
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
     parsed = json.loads(raw)
     scores = parsed.get("scores")
@@ -374,14 +400,16 @@ def score_episode(data, key, model, endpoint, caller=None):
     for session in data["sessions"]:
         if session["first_prompt"]:
             known.add(session["first_prompt"]["ref"])
-        known.update(session["steering_refs"])
+        known.update(session.get("steering_refs", []))
         for decision in session.get("decision_exchanges", []):
-            known.add(decision["response_ref"])
+            if decision.get("response_ref"):
+                known.add(decision["response_ref"])
             if decision.get("proposal_ref"):
                 known.add(decision["proposal_ref"])
-        for test in session["test_observations"]:
-            known.add(test["call_ref"])
-            if test["result_ref"]:
+        for test in session.get("test_observations", []):
+            if test.get("call_ref"):
+                known.add(test["call_ref"])
+            if test.get("result_ref"):
                 known.add(test["result_ref"])
     refs = parsed.get("evidence_refs", [])
     refs = [r for r in refs if isinstance(r, str) and r in known] if isinstance(refs, list) else []
@@ -530,7 +558,7 @@ def render_html(evidence, groups, episodes, narratives, scores, decisions=None, 
         limitations.append(f"仅 {coverage['scored_episodes']} / {coverage['episodes']} 个工作片段完成模型分析。")
     status = "已完成跨会话评价" if scored else "仅完成证据采集 · 人物评价待生成"
     limit_items = "".join(f"<li>{escape(item)}</li>" for item in limitations)
-    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI 协作方式 · 个人报告</title><style>body{{margin:0;background:#fbfaf7;color:#24221f;font:16px/1.7 -apple-system,BlinkMacSystemFont,sans-serif}}main{{max-width:920px;margin:auto;padding:40px 24px 90px}}header{{border-top:3px solid #f07832;padding:28px 0}}h1{{font-size:40px;line-height:1.25;max-width:820px}}h2{{font-size:22px;margin-bottom:10px}}h3{{margin-bottom:3px}}section{{border-top:1px solid #ded7cb;padding:25px 0}}p{{max-width:780px}}.eyebrow{{color:#a34b22;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}}.muted,small{{color:#756f67}}.profile,.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}}.profile-card,.metric{{background:white;border:1px solid #e5dfd7;border-radius:10px;padding:16px}}.profile-card span,.metric span{{display:block;color:#8c4b2d;font-size:13px}}.profile-card b,.metric b{{display:block;font-size:22px;margin-top:6px}}.profile-card p{{font-size:14px;margin:4px 0}}.metric small{{display:block;font-size:12px}}li{{margin:10px 0}}li small{{display:block;font-size:12px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:12px 8px;border-bottom:1px solid #e5dfd7;text-align:left;vertical-align:top}}td:nth-child(2){{font-weight:700;white-space:nowrap}}.notice{{background:#fff0e6;padding:15px;border-left:3px solid #f07832}}</style></head><body><main><header><div class="eyebrow">个人综合报告 · 独立复现原型</div><p class="muted">{escape(evidence['project_name'])} · {escape(status)} · 非 Paxel 官方报告</p><h1>{escape(person.get('headline') or '正在整理这位开发者与 AI 的协作方式')}</h1></header><section><div class="profile">{profile_card('他倾向于怎样构建？','builder_type')}{profile_card('他如何与 AI 协作？','collaboration_style')}</div></section><section><h2>从记录中能确认什么</h2><div class="metrics">{metrics}</div><p class="muted">来源：{escape(source_mix)}。这些是使用方式和证据覆盖，并不是能力分数。</p></section><section><h2>做了什么</h2><p>{escape(person.get('what_built') or '会话已解析，但尚未完成跨会话任务与结果核对。')}</p></section><section><h2>反复出现的决策方式</h2>{claims(person.get('decision_patterns', []))}</section><section><h2>体现出的优势</h2>{claims(person.get('strengths', []))}</section><section><h2>下一步最值得改进的地方</h2>{claims(person.get('growth_areas', []))}</section><section><h2>五维评价依据</h2><p class="muted">原版公开客户端的五个内部维度；先解释证据，再给分数。没有直接证据时留空。</p><table><tr><th>维度</th><th>综合分</th><th>判断依据</th></tr>{axis_rows}</table></section><section><h2>判断边界</h2><ul>{limit_items}</ul><p class="muted">内部使用 {coverage['episodes']} 个工作片段，其中 {coverage['scored_episodes']} 个完成模型分析；{coverage['decision_candidates']} 条决策候选尚不能直接等同确认的决策。</p></section></main></body></html>'''
+    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI 协作方式 · 个人报告</title><style>body{{margin:0;background:#fbfaf7;color:#24221f;font:16px/1.7 -apple-system,BlinkMacSystemFont,sans-serif}}main{{max-width:920px;margin:auto;padding:40px 24px 90px}}header{{border-top:3px solid #f07832;padding:28px 0}}h1{{font-size:40px;line-height:1.25;max-width:820px}}h2{{font-size:22px;margin-bottom:10px}}h3{{margin-bottom:3px}}section{{border-top:1px solid #ded7cb;padding:25px 0}}p{{max-width:780px}}.eyebrow{{color:#a34b22;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}}.muted,small{{color:#756f67}}.profile,.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}}.profile-card,.metric{{background:white;border:1px solid #e5dfd7;border-radius:10px;padding:16px}}.profile-card span,.metric span{{display:block;color:#8c4b2d;font-size:13px}}.profile-card b,.metric b{{display:block;font-size:22px;margin-top:6px}}.profile-card p{{font-size:14px;margin:4px 0}}.metric small{{display:block;font-size:12px}}li{{margin:10px 0}}li small{{display:block;font-size:12px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:12px 8px;border-bottom:1px solid #e5dfd7;text-align:left;vertical-align:top}}td:nth-child(2){{font-weight:700;white-space:nowrap}}.notice{{background:#fff0e6;padding:15px;border-left:3px solid #f07832}}</style></head><body><main><header><div class="eyebrow">个人综合报告 · 独立复现原型</div><p class="muted">{escape(evidence['project_name'])} · {escape(status)} · prompt profile: {escape(person.get('prompt_profile') or 'local')} · 非 Paxel 官方报告</p><h1>{escape(person.get('headline') or '正在整理这位开发者与 AI 的协作方式')}</h1></header><section><div class="profile">{profile_card('他倾向于怎样构建？','builder_type')}{profile_card('他如何与 AI 协作？','collaboration_style')}</div></section><section><h2>从记录中能确认什么</h2><div class="metrics">{metrics}</div><p class="muted">来源：{escape(source_mix)}。这些是使用方式和证据覆盖，并不是能力分数。</p></section><section><h2>做了什么</h2><p>{escape(person.get('what_built') or '会话已解析，但尚未完成跨会话任务与结果核对。')}</p></section><section><h2>反复出现的决策方式</h2>{claims(person.get('decision_patterns', []))}</section><section><h2>体现出的优势</h2>{claims(person.get('strengths', []))}</section><section><h2>下一步最值得改进的地方</h2>{claims(person.get('growth_areas', []))}</section><section><h2>五维评价依据</h2><p class="muted">原版公开客户端的五个内部维度；先解释证据，再给分数。没有直接证据时留空。</p><table><tr><th>维度</th><th>综合分</th><th>判断依据</th></tr>{axis_rows}</table></section><section><h2>判断边界</h2><ul>{limit_items}</ul><p class="muted">内部使用 {coverage['episodes']} 个工作片段，其中 {coverage['scored_episodes']} 个完成模型分析；{coverage['decision_candidates']} 条决策候选尚不能直接等同确认的决策。</p></section></main></body></html>'''
 
 
 def save(path, value):
@@ -568,12 +596,21 @@ def main(argv=None):
     parser.add_argument("--pr-diff-dir", type=Path, help="Directory containing pr-N.diff files exported locally")
     parser.add_argument("--base-ref", help="Git base ref for local refs/pull/N/head diffs")
     parser.add_argument("--score", action="store_true", help="Generate session narratives and episode scores with GLM")
+    parser.add_argument("--prompt-profile", choices=("local", "v15-v5"), default="local",
+                        help="local: independent rubric (default); v15-v5: public 0.3.48.2 client prompts")
     parser.add_argument("--model", default="glm-5.3")
     parser.add_argument("--endpoint", default="https://open.bigmodel.cn/api/paas/v4/chat/completions")
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days must be positive")
     project = base.canonical_project(args.project)
+    try:
+        prompt_bundle = profiles.load(args.prompt_profile)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
+    if args.prompt_profile != "local":
+        print(f"Prompt profile: {args.prompt_profile} ({profiles.PROFILE_DESCRIPTIONS[args.prompt_profile]})",
+              file=sys.stderr)
     if args.all_local and args.all_claude:
         parser.error("--all-local and --all-claude are mutually exclusive")
     evidence = (multi.collect_all_local(args.days, args.codex_dir, args.claude_dir, args.hermes_db, args.dsh_dir)
@@ -607,14 +644,18 @@ def main(argv=None):
             parser.error("GLM_API_KEY is missing; no model request sent")
         previous_narratives = read_json(out / "session_narratives.json")
         for session in evidence["sessions"]:
+            prompt_material = ([prompt_bundle["narrative"], prompt_bundle["merge"]]
+                               if args.prompt_profile == "v15-v5" else [NARRATIVE_PROMPT, MERGE_PROMPT])
             digest = fingerprint({"input": narrative_inputs[session["id"]],
-                                  "prompts": [NARRATIVE_PROMPT, MERGE_PROMPT], "model": args.model})
+                                  "prompts": prompt_material, "model": args.model,
+                                  "prompt_profile": args.prompt_profile})
             previous = previous_narratives.get(session["id"], {})
             if previous.get("status") == "generated" and previous.get("input_hash") == digest:
                 narratives[session["id"]] = previous
                 continue
             try:
-                narratives[session["id"]] = narrate_session(session, key, args.model, args.endpoint)
+                narratives[session["id"]] = narrate_session(session, key, args.model, args.endpoint,
+                                                            profile=args.prompt_profile, prompts=prompt_bundle)
             except Exception as exc:
                 narratives[session["id"]] = {"status": "failed", "error": type(exc).__name__}
             narratives[session["id"]]["input_hash"] = digest
@@ -624,7 +665,8 @@ def main(argv=None):
                 continue
             try:
                 decisions[session["id"]] = extra.classify_decisions(
-                    decisions[session["id"]], key, args.model, args.endpoint, glm_text)
+                    decisions[session["id"]], key, args.model, args.endpoint, glm_text,
+                    profile=args.prompt_profile, prompts=prompt_bundle)
             except Exception:
                 pass  # Keep explicitly unclassified candidates.
             save(out / "decision_exchanges.json", decisions)
@@ -639,13 +681,17 @@ def main(argv=None):
         save(out / "episode_inputs.json", episode_inputs)
         for episode in episodes:
             data = episode_inputs[episode["id"]]
-            digest = fingerprint({"input": data, "prompt": SCORING_PROMPT, "model": args.model})
+            prompt_material = (prompt_bundle["scoring"]
+                               if args.prompt_profile == "v15-v5" else SCORING_PROMPT)
+            digest = fingerprint({"input": data, "prompt": prompt_material, "model": args.model,
+                                  "prompt_profile": args.prompt_profile})
             previous = previous_scores.get(episode["id"], {})
             if previous.get("status") == "scored" and previous.get("input_hash") == digest:
                 scores[episode["id"]] = previous
                 continue
             try:
-                scores[episode["id"]] = score_episode(data, key, args.model, args.endpoint)
+                scores[episode["id"]] = score_episode(data, key, args.model, args.endpoint,
+                                                      profile=args.prompt_profile, prompts=prompt_bundle)
             except Exception as exc:
                 scores[episode["id"]] = {"status": "failed", "error": type(exc).__name__}
             scores[episode["id"]]["input_hash"] = digest
@@ -656,7 +702,8 @@ def main(argv=None):
     aggregate_input = person_input(evidence, groups, episodes, scores, decisions)
     save(out / "person_profile_input.json", aggregate_input)
     if args.score:
-        digest = fingerprint({"input": aggregate_input, "prompt": PERSON_PROMPT, "model": args.model})
+        digest = fingerprint({"input": aggregate_input, "prompt": PERSON_PROMPT, "model": args.model,
+                              "prompt_profile": args.prompt_profile})
         previous = read_json(out / "person_profile.json")
         if previous.get("status") == "scored" and previous.get("input_hash") == digest:
             person = previous
@@ -671,6 +718,7 @@ def main(argv=None):
             person["input_hash"] = digest
     else:
         person = synthesize_person(aggregate_input, None, None, None)
+    person["prompt_profile"] = args.prompt_profile
     save(out / "person_profile.json", person)
     (out / "report.html").write_text(render_html(evidence, groups, episodes, narratives, scores, decisions, reviews, diffs, person), encoding="utf-8")
     print(f"Sessions {len(evidence['sessions'])}; commit groups {len(groups)}; episodes {len(episodes)}")

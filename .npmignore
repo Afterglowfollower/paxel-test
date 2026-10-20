@@ -1,0 +1,4 @@
+python/prompts/v15-v5/*.txt
+__pycache__/
+*.pyc
+paxel-report/

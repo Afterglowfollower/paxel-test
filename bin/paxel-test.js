@@ -27,6 +27,7 @@ if (raw.includes('--help') || raw.includes('-h')) {
   --days N             分析最近 N 天，默认 90
   --output-dir PATH    报告目录，默认 ./paxel-report
   --score              强制调用 GLM；需要 GLM_API_KEY
+  --prompt-profile P   local（默认）或 v15-v5（需先运行 tools/extract-v15-prompts.sh）
   --no-score           只生成本地证据报告，即使设置了 GLM_API_KEY
   --model NAME         GLM 模型名，默认 glm-5.3
 

@@ -43,10 +43,35 @@ npx --yes github:Afterglowfollower/paxel-test
 
 没有 Key 时仍会生成**未评分**的本地覆盖报告，不会用会话数量或工具调用次数冒充能力评价。使用 `--no-score` 可强制只在本机处理；使用 `--score` 可明确要求模型评价。请勿把 Key 写入命令行参数、仓库或聊天记录。模型评价模式会把报告所需的会话片段和中间摘要发送到 GLM API；请先确认你有权处理这些会话。
 
+## Prompt profile
+
+默认使用本仓库独立编写的 prompt（`--prompt-profile local`）。如果要对齐公开客户端里的三处 prompt，先在本机运行：
+
+```bash
+# 在仓库根目录运行
+bash tools/extract-v15-prompts.sh
+```
+
+它会从公开镜像 `ghcr.io/yc-software/paxel-client:sha-07dc3b878811`（应用版本 `0.3.48.2`，2026-07-02）提取评分 v15、会话叙事 v5、叙事合并 v5、决策分类 v5，然后可以用：
+
+```bash
+npx --yes github:Afterglowfollower/paxel-test --prompt-profile v15-v5
+```
+
+`0.3.48.2` 是**最后一个还带 prompt 正文的公开客户端**。线上 `0.3.83.2`（`latest`）只声明 prompt id（`episode_scoring v16`、`session_narrative v6` 等），正文由服务端注入，公开镜像里没有。人物级综合 prompt 也不在公开客户端里，所以两个 profile 都用本仓库的本地实现；`v15-v5` 表示“三处客户端 prompt 用官方 v15/v5，人物综合仍是本地”，不是官方同分复刻。
+
+prompt 正文不随仓库分发（见 `python/prompts/v15-v5/NOTICE.md`），只在本机生成和使用。
+
+官方 v15/v5 prompt 是英文原生，所以这个 profile 下中间叙事和片段事实是英文；报告页面和人物综合仍是中文。这是对原版 prompt 的忠实行为，不是语言 bug。离线检查：
+
+```bash
+python3 tools/smoke-prompt-profiles.py
+```
+
 ## 报告与局限
 
 所有输出保存在本机指定的目录，包括 `report.html`、`person_profile.json`、会话证据、候选决策、工作片段和评分输入 JSON。**这些文件可能含私人会话或项目内容，不要直接外发。** 工具本身不会上传到 Paxel 或众测平台。
 
 目前已用原版 Paxel 镜像在断网条件下对照会话发现、片段关联和决策候选阶段。Claude Code 的 41 份文件都被发现，双方各生成 35 个工作片段；原版决策候选 220 条，本工具 216 条。也对照了用户已生成的官方 V3 报告页面：原版的人物叙事远比五个分数丰富。本工具参考其报告层次、公开的五维评分锚点和四类决策分类，但原版服务端的跨会话叙事合成、人物标签生成与校准代码未公开；这些部分是独立实现，不能称为官方同分复刻。公开客户端另有 49 条决策模式目录，本工具尚未逐条映射。逐层状态见 [逆向对照](REVERSE_ENGINEERING.md)。
 
-此仓库只包含独立复现的 CLI 和本地分析代码，不包含用户会话、私密报告、官方客户端镜像或 API Key。
+此仓库只包含独立复现的 CLI、本地分析代码和 prompt 提取脚本；不包含用户会话、私密报告、官方客户端镜像或 API Key。v15-v5 的 prompt 正文由本地脚本生成，并被 git 忽略。

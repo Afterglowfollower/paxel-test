@@ -11,7 +11,8 @@
     "python/",
     "README.md",
     "REVERSE_ENGINEERING.md",
-    "LICENSE"
+    "LICENSE",
+    "tools/"
   ],
   "engines": {
     "node": ">=18"

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Read-only Codex and Hermes adapters for the local report pipeline."""
 
 from collections import Counter
