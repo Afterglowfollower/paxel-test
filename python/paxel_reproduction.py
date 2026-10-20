@@ -16,6 +16,9 @@ import os
 from pathlib import Path
 import re
 import sys
+import socket
+import time
+from urllib import error as urlerror
 from urllib import request
 
 import project_analyzer as base
@@ -262,20 +265,28 @@ def link_episodes(groups, sessions):
     return episodes
 
 
-def glm_text(system, user, key, model, endpoint):
+def glm_text(system, user, key, model, endpoint, attempts=2, timeout=240):
     if endpoint not in base.GLM_ENDPOINTS:
-        raise ValueError("Endpoint must be an official GLM Chat Completions URL")
+        raise ValueError("Endpoint must be one of the official GLM Chat Completions URLs")
     body = json.dumps({"model": model, "stream": False,
                        "messages": [{"role": "system", "content": system},
                                     {"role": "user", "content": user}]}, ensure_ascii=False).encode()
     req = request.Request(endpoint, data=body,
                           headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
                           method="POST")
-    with request.urlopen(req, timeout=180) as response:
-        content = json.load(response)["choices"][0]["message"]["content"]
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("Empty model response")
-    return content.strip()
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            with request.urlopen(req, timeout=timeout) as response:
+                content = json.load(response)["choices"][0]["message"]["content"]
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("Empty model response")
+            return content.strip()
+        except (OSError, ValueError) as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                time.sleep(2 * (attempt + 1))
+    raise last_error
 
 
 def fenced(content):
