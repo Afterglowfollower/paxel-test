@@ -18,6 +18,7 @@ import sys
 from urllib import request
 
 import project_analyzer as base
+import multi_agent_sources as multi
 import paxel_evidence as extra
 
 
@@ -414,6 +415,10 @@ def main(argv=None):
     parser.add_argument("--claude-dir", default="~/.claude/projects")
     parser.add_argument("--all-claude", action="store_true",
                         help="Analyze all Claude Code projects, transcripts only")
+    parser.add_argument("--all-local", action="store_true",
+                        help="Analyze local Claude Code, Codex, and Hermes coding sessions")
+    parser.add_argument("--hermes-db", default="~/.hermes/state.db",
+                        help="Hermes SQLite session database (read-only)")
     parser.add_argument("--output-dir", type=Path, default=Path("paxel-reproduction"))
     parser.add_argument("--pr-diff-dir", type=Path, help="Directory containing pr-N.diff files exported locally")
     parser.add_argument("--base-ref", help="Git base ref for local refs/pull/N/head diffs")
@@ -424,8 +429,12 @@ def main(argv=None):
     if args.days < 1:
         parser.error("--days must be positive")
     project = base.canonical_project(args.project)
-    evidence = (base.collect_all_claude(args.days, args.claude_dir) if args.all_claude else
-                base.collect(project, args.days, args.codex_dir, args.claude_dir))
+    if args.all_local and args.all_claude:
+        parser.error("--all-local and --all-claude are mutually exclusive")
+    evidence = (multi.collect_all_local(args.days, args.codex_dir, args.claude_dir, args.hermes_db)
+                if args.all_local else base.collect_all_claude(args.days, args.claude_dir)
+                if args.all_claude else multi.collect_project(
+                    project, args.days, args.codex_dir, args.claude_dir, args.hermes_db))
     if not evidence["sessions"]:
         parser.error("No matching local sessions")
     groups = commit_groups(evidence["commits"], evidence["sessions"])

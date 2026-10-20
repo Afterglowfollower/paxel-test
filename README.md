@@ -12,13 +12,21 @@ npx --yes github:Afterglowfollower/paxel-test
 
 命令结束后打开当前目录的 `paxel-report/report.html`。默认全量 Claude 模式会关联主会话与子代理，但**不汇总 Git 提交**。
 
-要为一个具体项目加入本地 Git 证据，可运行：
+要为一个具体项目关联 Codex、Claude Code、Hermes 会话及本地 Git 证据，可运行：
 
 ```bash
 npx --yes github:Afterglowfollower/paxel-test --project /绝对路径/你的项目
 ```
 
 如果 Claude Code 会话保存在别处，加 `--claude-dir /会话目录`。用 `--days 30` 指定时间范围，用 `--output-dir /私有目录` 指定报告位置。运行 `npx --yes github:Afterglowfollower/paxel-test --help` 可查看参数。
+
+要把本机的 Claude Code、Codex 和 Hermes 编程会话一起纳入报告：
+
+```bash
+npx --yes github:Afterglowfollower/paxel-test --all-local
+```
+
+`--all-local` 读取 `~/.codex/sessions`、`~/.claude/projects` 和 `~/.hermes/state.db`；Hermes 数据库仅以 SQLite 只读模式打开，默认只纳入带工作目录的 CLI/one-shot/ACP 会话。可用 `--codex-dir`、`--claude-dir`、`--hermes-db` 指定其他位置。跨项目汇总模式暂不关联各项目 Git 提交；需要 Git 证据时使用 `--project`。Cursor 暂未接入，等有脱敏导出样本后再适配。
 
 ## 模型评价
 

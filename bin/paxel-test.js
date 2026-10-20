@@ -11,6 +11,7 @@ if (raw.includes('--help') || raw.includes('-h')) {
 
 用法:
   npx --yes github:Afterglowfollower/paxel-test
+  npx --yes github:Afterglowfollower/paxel-test --all-local
   npx --yes github:Afterglowfollower/paxel-test --project /path/to/project
 
 默认读取 ~/.claude/projects 下最近 90 天的全部 Claude Code 会话。
@@ -19,7 +20,9 @@ if (raw.includes('--help') || raw.includes('-h')) {
 选项:
   --project PATH       只分析一个项目，可同时读取该项目的 Codex/Claude 会话和 Git
   --claude-dir PATH    自定义 Claude Code 会话目录
-  --codex-dir PATH     自定义 Codex 会话目录（配合 --project）
+  --codex-dir PATH     自定义 Codex 会话目录
+  --all-local          汇总 Claude Code、Codex 与 Hermes 编程会话
+  --hermes-db PATH     Hermes SQLite 数据库，默认 ~/.hermes/state.db
   --days N             分析最近 N 天，默认 90
   --output-dir PATH    报告目录，默认 ./paxel-report
   --score              强制调用 GLM；需要 GLM_API_KEY
@@ -55,7 +58,7 @@ for (let i = 0; i < raw.length; i += 1) {
 
 if (project) {
   args.unshift(project);
-} else if (!args.includes('--all-claude')) {
+} else if (!args.includes('--all-claude') && !args.includes('--all-local')) {
   args.unshift('--all-claude');
 }
 if (!hasOutputDir) {

@@ -362,7 +362,7 @@ def merge_session_segments(segments):
     return merged
 
 
-def collect(project, days, codex_dir, claude_dir):
+def collect(project, days, codex_dir, claude_dir, extra_sessions=None):
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     sessions = []
     files_seen = 0
@@ -381,6 +381,9 @@ def collect(project, days, codex_dir, claude_dir):
             source_files[source] += 1
     matched_files = len(sessions)
     sessions = merge_session_segments(sessions)
+    if extra_sessions:
+        sessions.extend(extra_sessions)
+        matched_files += len(extra_sessions)
     sessions.sort(key=lambda s: s["started_at"])
     all_events = [e for s in sessions for e in s["events"]]
     tool_calls = [e for e in all_events if e["kind"] == "tool_call"]
