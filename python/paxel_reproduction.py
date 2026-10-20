@@ -368,6 +368,14 @@ def render_html(evidence, groups, episodes, narratives, scores, decisions=None, 
     decisions = decisions or {}
     reviews = reviews or {}
     diffs = diffs or {}
+    session_by_id = {session["id"]: session for session in evidence["sessions"]}
+    source_rows = "".join(
+        f"<tr><th>{escape(source)}</th><td>{count}</td></tr>"
+        for source, count in sorted(evidence.get("coverage", {}).get("sources", {}).items()))
+    source_table = (f"<section><h2>数据来源</h2><table><tr><th>Agent</th><th>会话</th></tr>{source_rows}</table>"
+                    "<p>仅统计实际解析出的会话；工具调用与模型评分的证据质量仍需人工核对。</p></section>")
+    model_note = ("模型分析已尝试；请核对每个片段的状态，不能视为 Paxel 官方分数。"
+                  if scores or narratives else "会话叙事和评分尚未调用模型。")
     cards = []
     for episode in episodes:
         group = next((g for g in groups if g["id"] == episode["commit_group_id"]), None)
@@ -375,7 +383,10 @@ def render_html(evidence, groups, episodes, narratives, scores, decisions=None, 
         diff = diffs.get(group["id"], {}) if group else {}
         score = scores.get(episode["id"], {})
         rows = "".join(f"<tr><th>{escape(label)}</th><td>{score.get('scores',{}).get(axis) if score.get('scores',{}).get(axis) is not None else '待评价'}</td></tr>" for axis, label in AXES.items())
-        links = ", ".join(f"{x['session_id'][:12]} ({x['link_type'] or 'session_only'}, {x['link_confidence']:.1f})" for x in episode["session_links"])
+        links = ", ".join(
+            f"{session_by_id.get(x['session_id'], {}).get('source', 'unknown')}:{x['session_id'][:12]} "
+            f"({x['link_type'] or 'session_only'}, {x['link_confidence']:.1f})"
+            for x in episode["session_links"])
         notes = ""
         for s in evidence["sessions"]:
             if s["id"] not in {x["session_id"] for x in episode["session_links"]}:
@@ -387,7 +398,7 @@ def render_html(evidence, groups, episodes, narratives, scores, decisions=None, 
         count = sum(len(decisions.get(link["session_id"], [])) for link in episode["session_links"])
         cards.append(f"<section><h2>{escape(episode['id'])} · {escape(episode['episode_type'])}</h2><p>提交组：{escape(group['title'] if group else '无')}；关联会话：{escape(links or '无')}</p><p>关联置信度：{episode['confidence']:.2f}；评分状态：{escape(score.get('status','待生成'))}</p>"
                      f"<p>差异来源：{escape(diff.get('source','无'))} · 代码审查：{escape(review.get('status','无'))} · 决策候选：{count}</p><table>{rows}</table><p>{escape(score.get('facts',''))}</p>{notes}</section>")
-    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Paxel 流水线复现预览</title><style>body{{margin:0;background:#f3f5f8;color:#1c2942;font:16px/1.6 -apple-system,BlinkMacSystemFont,sans-serif}}main{{max-width:920px;margin:auto;padding:24px}}header{{background:#172755;color:white;border-radius:16px;padding:26px}}section{{background:white;padding:20px;margin:15px 0;border-radius:12px}}h1{{margin:0}}h2{{margin-top:0}}table{{border-collapse:collapse;width:100%}}td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}details{{margin:8px 0}}pre{{white-space:pre-wrap;font:14px/1.5 inherit;background:#f6f7fa;padding:12px;border-radius:8px}}.note{{background:#fff3d6}}</style></head><body><main><header><h1>{escape(evidence['project_name'])}</h1><p>公开源码指导的三阶段复现 · 非 Paxel 官方输出</p></header><section class="note">已解析 {len(evidence['sessions'])} 个会话、{len(groups)} 个提交组，构建 {len(episodes)} 个工作片段。会话叙事和评分需要模型 API；历史分支仅在本地 reflog 留存时可见，PR diff 需要本地 PR 引用或导出的 diff。代码审查在未调用模型时仅包含静态观察，计划文件尚未采集。</section>{''.join(cards)}</main></body></html>'''
+    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Paxel 流水线复现预览</title><style>body{{margin:0;background:#f3f5f8;color:#1c2942;font:16px/1.6 -apple-system,BlinkMacSystemFont,sans-serif}}main{{max-width:920px;margin:auto;padding:24px}}header{{background:#172755;color:white;border-radius:16px;padding:26px}}section{{background:white;padding:20px;margin:15px 0;border-radius:12px}}h1{{margin:0}}h2{{margin-top:0}}table{{border-collapse:collapse;width:100%}}td,th{{padding:7px;border-bottom:1px solid #ddd;text-align:left}}details{{margin:8px 0}}pre{{white-space:pre-wrap;font:14px/1.5 inherit;background:#f6f7fa;padding:12px}}.note{{background:#fff3d6}}</style></head><body><main><header><h1>{escape(evidence['project_name'])}</h1><p>公开源码指导的三阶段复现 · 非 Paxel 官方输出</p></header><section class="note">已解析 {len(evidence['sessions'])} 个会话、{len(groups)} 个提交组，构建 {len(episodes)} 个工作片段。{escape(model_note)}历史分支仅在本地 reflog 留存时可见，PR diff 需要本地 PR 引用或导出的 diff。代码审查在未调用模型时仅包含静态观察，计划文件尚未采集。</section>{source_table}{''.join(cards)}</main></body></html>'''
 
 
 def save(path, value):
@@ -419,6 +430,8 @@ def main(argv=None):
                         help="Analyze local Claude Code, Codex, and Hermes coding sessions")
     parser.add_argument("--hermes-db", default="~/.hermes/state.db",
                         help="Hermes SQLite session database (read-only)")
+    parser.add_argument("--dsh-dir", type=Path,
+                        help="DeepSeek harness session directory (defaults to DSH_HOME/sessions or local discovery)")
     parser.add_argument("--output-dir", type=Path, default=Path("paxel-reproduction"))
     parser.add_argument("--pr-diff-dir", type=Path, help="Directory containing pr-N.diff files exported locally")
     parser.add_argument("--base-ref", help="Git base ref for local refs/pull/N/head diffs")
@@ -431,10 +444,10 @@ def main(argv=None):
     project = base.canonical_project(args.project)
     if args.all_local and args.all_claude:
         parser.error("--all-local and --all-claude are mutually exclusive")
-    evidence = (multi.collect_all_local(args.days, args.codex_dir, args.claude_dir, args.hermes_db)
+    evidence = (multi.collect_all_local(args.days, args.codex_dir, args.claude_dir, args.hermes_db, args.dsh_dir)
                 if args.all_local else base.collect_all_claude(args.days, args.claude_dir)
                 if args.all_claude else multi.collect_project(
-                    project, args.days, args.codex_dir, args.claude_dir, args.hermes_db))
+                    project, args.days, args.codex_dir, args.claude_dir, args.hermes_db, args.dsh_dir))
     if not evidence["sessions"]:
         parser.error("No matching local sessions")
     groups = commit_groups(evidence["commits"], evidence["sessions"])

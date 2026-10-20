@@ -21,8 +21,9 @@ if (raw.includes('--help') || raw.includes('-h')) {
   --project PATH       只分析一个项目，可同时读取该项目的 Codex/Claude 会话和 Git
   --claude-dir PATH    自定义 Claude Code 会话目录
   --codex-dir PATH     自定义 Codex 会话目录
-  --all-local          汇总 Claude Code、Codex 与 Hermes 编程会话
+  --all-local          汇总 Claude Code、Codex、Hermes 和 DeepSeek harness 会话
   --hermes-db PATH     Hermes SQLite 数据库，默认 ~/.hermes/state.db
+  --dsh-dir PATH       DeepSeek harness 的 sessions 目录
   --days N             分析最近 N 天，默认 90
   --output-dir PATH    报告目录，默认 ./paxel-report
   --score              强制调用 GLM；需要 GLM_API_KEY

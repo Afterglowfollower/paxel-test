@@ -247,7 +247,10 @@ def normalize_session(source, path, rows, cwd, session_id, parent_id, cutoff):
             subtype = payload.get("type")
             if typ == "response_item":
                 if subtype == "message" and payload.get("role") in ("user", "assistant"):
-                    add_message(payload["role"], at, blocks_text(payload.get("content")))
+                    text = blocks_text(payload.get("content"))
+                    if payload["role"] == "user":
+                        text = claude_user_text(text)
+                    add_message(payload["role"], at, text)
                 elif subtype in ("function_call", "custom_tool_call"):
                     name = str(payload.get("name") or "unknown")
                     inp = payload.get("arguments") or payload.get("input")
@@ -264,8 +267,9 @@ def normalize_session(source, path, rows, cwd, session_id, parent_id, cutoff):
                     add("tool_result", at, call_id=call_id, call_ref=call_map.get(call_id),
                         text=redact(blocks_text(content) if isinstance(content, list) else content, 1200))
             elif typ == "event_msg" and subtype in ("user_message", "agent_message"):
-                add_message("user" if subtype == "user_message" else "assistant", at,
-                            payload.get("message", ""))
+                role = "user" if subtype == "user_message" else "assistant"
+                text = payload.get("message", "")
+                add_message(role, at, claude_user_text(text) if role == "user" else text)
         else:
             if typ not in ("user", "assistant"):
                 continue
