@@ -587,7 +587,9 @@ def main(argv=None):
     parser.add_argument("--all-claude", action="store_true",
                         help="Analyze all Claude Code projects, transcripts only")
     parser.add_argument("--all-local", action="store_true",
-                        help="Analyze local Claude Code, Codex, and Hermes coding sessions")
+                        help="Analyze local Claude Code, Codex, Hermes, and DeepSeek sessions")
+    parser.add_argument("--sources",
+                        help="Comma-separated source filter: claude,codex,hermes,deepseek")
     parser.add_argument("--hermes-db", default="~/.hermes/state.db",
                         help="Hermes SQLite session database (read-only)")
     parser.add_argument("--dsh-dir", type=Path,
@@ -617,6 +619,23 @@ def main(argv=None):
                 if args.all_local else base.collect_all_claude(args.days, args.claude_dir)
                 if args.all_claude else multi.collect_project(
                     project, args.days, args.codex_dir, args.claude_dir, args.hermes_db, args.dsh_dir))
+    if args.sources:
+        wanted = {item.strip() for item in args.sources.split(",") if item.strip()}
+        known = {"claude", "codex", "hermes", "deepseek"}
+        unknown = wanted - known
+        if unknown:
+            parser.error("unknown --sources values: " + ", ".join(sorted(unknown)))
+        evidence["sessions"] = [s for s in evidence["sessions"] if s.get("source") in wanted]
+        if not evidence["sessions"]:
+            parser.error("no sessions matched --sources " + ",".join(sorted(wanted)))
+        coverage = evidence.setdefault("coverage", {})
+        coverage["matched_sessions"] = len(evidence["sessions"])
+        coverage["main_sessions"] = sum(1 for s in evidence["sessions"] if not s.get("parent_id"))
+        coverage["subagent_sessions"] = sum(1 for s in evidence["sessions"] if s.get("parent_id"))
+        coverage["user_messages"] = sum(
+            1 for s in evidence["sessions"] for e in s.get("events", [])
+            if e.get("kind") == "message" and e.get("role") == "user"
+        )
     if not evidence["sessions"]:
         parser.error("No matching local sessions")
     groups = commit_groups(evidence["commits"], evidence["sessions"])

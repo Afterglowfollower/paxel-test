@@ -22,6 +22,7 @@ if (raw.includes('--help') || raw.includes('-h')) {
   --claude-dir PATH    自定义 Claude Code 会话目录
   --codex-dir PATH     自定义 Codex 会话目录
   --all-local          汇总 Claude Code、Codex、Hermes 和 DeepSeek harness 会话
+  --sources LIST       只分析指定来源：claude,codex,hermes,deepseek（默认全部）
   --hermes-db PATH     Hermes SQLite 数据库，默认 ~/.hermes/state.db
   --dsh-dir PATH       DeepSeek harness 的 sessions 目录
   --days N             分析最近 N 天，默认 90
