@@ -303,11 +303,14 @@ def parse_narrative(text):
     return narrative, intent
 
 
-def narrate_session(session, key, model, endpoint, caller=None, profile="local", prompts=None):
+def narrate_session(session, key, model, endpoint, caller=None, profile="local", prompts=None,
+                    max_parts=0):
     caller = caller or glm_text
     parts = transcript_parts(session)
     if not parts:
         return {"status": "no_evidence", "narrative": None, "intent": None, "parts": 0}
+    if max_parts and len(parts) > max_parts:
+        return {"status": "skipped_too_large", "narrative": None, "intent": None, "parts": len(parts)}
     notes = []
     if profile == "v15-v5":
         prompts = prompts or {}
@@ -601,6 +604,8 @@ def main(argv=None):
                         help="Analyze local Claude Code, Codex, Hermes, and DeepSeek sessions")
     parser.add_argument("--sources",
                         help="Comma-separated source filter: claude,codex,hermes,deepseek")
+    parser.add_argument("--max-parts", type=int, default=0,
+                        help="Skip sessions that need more than N narrative parts (0 = no limit)")
     parser.add_argument("--hermes-db", default="~/.hermes/state.db",
                         help="Hermes SQLite session database (read-only)")
     parser.add_argument("--dsh-dir", type=Path,
@@ -685,7 +690,8 @@ def main(argv=None):
                 continue
             try:
                 narratives[session["id"]] = narrate_session(session, key, args.model, args.endpoint,
-                                                            profile=args.prompt_profile, prompts=prompt_bundle)
+                                                            profile=args.prompt_profile, prompts=prompt_bundle,
+                                                            max_parts=args.max_parts)
             except Exception as exc:
                 narratives[session["id"]] = {"status": "failed", "error": type(exc).__name__}
             narratives[session["id"]]["input_hash"] = digest
