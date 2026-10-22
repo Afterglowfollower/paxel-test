@@ -2,17 +2,6 @@
 
 这是一个**独立的本地复现原型**，用于分析 Claude Code / Codex / Hermes / DeepSeek harness / opencode 会话、关联本地 Git 证据，并生成 HTML 报告。它不是 YC Paxel 官方客户端，也不保证与官方分数相同。
 
-## 30 秒上手（不需要任何 Key）
-
-```bash
-npx --yes github:Afterglowfollower/paxel-test --all-local
-```
-
-没有配置 `ARK_API_KEY` 也没有 `--relay` 时，工具会自动**只跑本地证据分析**：读会话、关联
-Git、生成 `paxel-report/report.html`，不会调用任何模型，也不会把内容发出去。
-
-需要模型评价时再加 Key 或共享中转，见下面「模型评价」一节。
-
 ## 前置
 
 - Node.js 18+
