@@ -367,6 +367,48 @@ def merge_session_segments(segments):
     return merged
 
 
+def collect_repo_commits(project, sessions):
+    """Collect local commits for one repository, bounded by its sessions."""
+    repo = git("rev-parse", "--show-toplevel", cwd=project)
+    if not repo or not sessions:
+        return []
+    repo_path = str(Path(repo).resolve())
+    starts = [parse_time(s.get("started_at")) for s in sessions if parse_time(s.get("started_at"))]
+    ends = [parse_time(s.get("ended_at")) for s in sessions if parse_time(s.get("ended_at"))]
+    if not starts or not ends:
+        return []
+    reflog_branches = defaultdict(set)
+    reflog = git("reflog", "--all", "--format=%H%x09%gD", "-n", "5000", cwd=repo)
+    for line in reflog.splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) == 2 and parts[1].startswith("refs/heads/"):
+            branch = parts[1].split("@{", 1)[0].removeprefix("refs/heads/")
+            reflog_branches[parts[0]].add(branch)
+    since = min(starts) - timedelta(days=1)
+    until = max(ends) + timedelta(days=1)
+    raw = git("log", "--since=" + iso(since), "--until=" + iso(until),
+              "--format=%H%x09%aI%x09%s", "-n", "500", cwd=repo)
+    commits = []
+    for line in raw.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        numstat = git("show", "--format=", "--numstat", parts[0], cwd=repo)
+        stats = [value.split("\t", 2) for value in numstat.splitlines() if "\t" in value]
+        paths = [value[-1] for value in stats]
+        insertions = sum(int(value[0]) for value in stats if len(value) == 3 and value[0].isdigit())
+        deletions = sum(int(value[1]) for value in stats if len(value) == 3 and value[1].isdigit())
+        branches = sorted(reflog_branches.get(parts[0], []))
+        commits.append({"sha": parts[0], "at": parts[1], "subject": redact(parts[2], 250),
+                        "changed_files": [redact(path, 300) for path in paths[:60]],
+                        "changed_file_count": len(paths), "insertions": insertions,
+                        "deletions": deletions, "reflog_branches": branches,
+                        "branch": branches[0] if len(branches) == 1 else None,
+                        "branch_source": "local_reflog" if len(branches) == 1 else None,
+                        "repo": repo_path, "repo_name": Path(repo_path).name})
+    return commits
+
+
 def collect(project, days, codex_dir, claude_dir, extra_sessions=None):
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     sessions = []
@@ -397,34 +439,11 @@ def collect(project, days, codex_dir, claude_dir, extra_sessions=None):
     touched = sorted({p for e in tool_calls for p in e.get("paths", [])})
     steering = [e for e in users[1:] if STEERING_PATTERN.search(e["text"])]
     repo = git("rev-parse", "--show-toplevel", cwd=project)
-    commits = []
-    if repo and sessions:
-        reflog_branches = defaultdict(set)
-        reflog = git("reflog", "--all", "--format=%H%x09%gD", "-n", "5000", cwd=project)
-        for line in reflog.splitlines():
-            parts = line.split("\t", 1)
-            if len(parts) == 2 and parts[1].startswith("refs/heads/"):
-                branch = parts[1].split("@{", 1)[0].removeprefix("refs/heads/")
-                reflog_branches[parts[0]].add(branch)
-        since = parse_time(sessions[0]["started_at"]) - timedelta(days=1)
-        until = parse_time(sessions[-1]["ended_at"]) + timedelta(days=1)
-        raw = git("log", "--since=" + iso(since), "--until=" + iso(until),
-                  "--format=%H%x09%aI%x09%s", "-n", "500", cwd=project)
-        for line in raw.splitlines():
-            parts = line.split("\t", 2)
-            if len(parts) == 3:
-                numstat = git("show", "--format=", "--numstat", parts[0], cwd=project)
-                stats = [v.split("\t", 2) for v in numstat.splitlines() if "\t" in v]
-                paths = [v[-1] for v in stats]
-                insertions = sum(int(v[0]) for v in stats if len(v) == 3 and v[0].isdigit())
-                deletions = sum(int(v[1]) for v in stats if len(v) == 3 and v[1].isdigit())
-                branches = sorted(reflog_branches.get(parts[0], []))
-                commits.append({"sha": parts[0], "at": parts[1], "subject": redact(parts[2], 250),
-                                "changed_files": [redact(p, 300) for p in paths[:60]],
-                                "changed_file_count": len(paths), "insertions": insertions,
-                                "deletions": deletions, "reflog_branches": branches,
-                                "branch": branches[0] if len(branches) == 1 else None,
-                                "branch_source": "local_reflog" if len(branches) == 1 else None})
+    repo_path = str(Path(repo).resolve()) if repo else None
+    for session in sessions:
+        session["repo"] = repo_path
+        session["repo_name"] = Path(repo_path).name if repo_path else None
+    commits = collect_repo_commits(project, sessions)
     return {"schema": "project-evidence.v1", "project_name": project.name,
             "project_path": str(project), "generated_at": iso(datetime.now(timezone.utc)),
             "window_days": days, "coverage": {"files_scanned": files_seen, "matched_files": matched_files,

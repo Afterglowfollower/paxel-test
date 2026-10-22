@@ -20,17 +20,17 @@ npx --yes github:Afterglowfollower/paxel-test --project /绝对路径/你的项�
 
 如果 Claude Code 会话保存在别处，加 `--claude-dir /会话目录`。用 `--days 30` 指定时间范围，用 `--output-dir /私有目录` 指定报告位置。运行 `npx --yes github:Afterglowfollower/paxel-test --help` 可查看参数。
 
-要把本机的 Claude Code、Codex、Hermes 和 DeepSeek harness 编程会话一起纳入报告：
+要把本机的 Claude Code、Codex、Hermes、DeepSeek harness 和 opencode 编程会话一起纳入报告：
 
 ```bash
 npx --yes github:Afterglowfollower/paxel-test --all-local
 ```
 
-`--all-local` 读取 `~/.codex/sessions`、`~/.claude/projects`、`~/.hermes/state.db` 和 DeepSeek harness 的 v4 会话日志。Hermes 数据库仅以 SQLite 只读模式打开，默认只纳入带工作目录的 CLI/one-shot/ACP 会话；已压缩归档的消息也会保留。DeepSeek harness 会扫描实际存在的 `$DSH_HOME/sessions`、`~/.dsh/sessions` 和 `~/dsh-home/sessions` 并按会话 ID 去重；可用 `--dsh-dir` 明确指定。压缩日志需要 Python `zstandard` 包；如未安装，先运行 `python3 -m pip install zstandard`。
+`--all-local` 读取 `~/.codex/sessions`、`~/.claude/projects`、`~/.hermes/state.db`、DeepSeek harness 的 v4 会话日志和 opencode 的 SQLite 数据库。它还会按每个会话的 `cwd` 找到对应 Git 仓库，收集时间窗内的本地提交，并按仓库分组、关联片段；不在 Git 仓库里的会话（例如临时工作目录）不会产生提交证据。Hermes 数据库仅以 SQLite 只读模式打开，默认只纳入带工作目录的 CLI/one-shot/ACP 会话；已压缩归档的消息也会保留。DeepSeek harness 会扫描实际存在的 `$DSH_HOME/sessions`、`~/.dsh/sessions` 和 `~/dsh-home/sessions` 并按会话 ID 去重；可用 `--dsh-dir` 明确指定。压缩日志需要 Python `zstandard` 包；如未安装，先运行 `python3 -m pip install zstandard`。
 
-只分析某个来源时加 `--sources hermes`（逗号分隔可多选）；超大会话可用 `--max-parts 2` 跳过，避免单次模型调用过慢。可用 `--codex-dir`、`--claude-dir`、`--hermes-db` 指定其他位置。跨项目汇总模式暂不关联各项目 Git 提交；需要 Git 证据时使用 `--project`。Cursor 暂未接入，等有脱敏导出样本后再适配。
+只分析某个来源时加 `--sources hermes`（逗号分隔可多选，含 opencode）；超大会话可用 `--max-parts 2` 跳过，避免单次模型调用过慢；模型调用默认 4 路并发，可用 `--concurrency 1` 退回串行。可用 `--codex-dir`、`--claude-dir`、`--hermes-db`、`--dsh-dir`、`--opencode-dir` 指定其他位置。Cursor 暂未接入，等有脱敏导出样本后再适配。
 
-这四种来源统一提取用户/助手消息、工具调用与结果，Codex 的同一逻辑会话会合并分段，Hermes 会保留压缩归档的可见消息，DeepSeek harness 的运行时注入消息不会算作用户判断。DeepSeek 目前仅支持 v4 JSONL（含 `.zstd` 压缩）；它和 Hermes 的评分尚未与 Paxel 原版做逐阶段同分验证。
+这五种来源统一提取用户/助手消息、工具调用与结果，Codex 的同一逻辑会话会合并分段，Hermes 会保留压缩归档的可见消息，opencode 的 SQLite 以只读方式读取，DeepSeek harness 的运行时注入消息不会算作用户判断。DeepSeek 目前仅支持 v4 JSONL（含 `.zstd` 压缩）；它和 Hermes 的评分尚未与 Paxel 原版做逐阶段同分验证。
 
 ## 模型评价
 

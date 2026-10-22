@@ -245,15 +245,198 @@ def collect_deepseek(days, dsh_dir):
     return sessions, len(files)
 
 
-def collect_all_local(days, codex_dir, claude_dir, hermes_db, dsh_dir=None):
+OPENCODE_TOOL_MAP = {
+    "bash": "Bash", "edit": "Edit", "write": "Write", "read": "Read",
+    "grep": "Grep", "glob": "Glob", "webfetch": "WebFetch", "websearch": "WebSearch",
+    "todowrite": "TodoWrite", "task": "Task", "skill": "Skill", "apply_patch": "ApplyPatch",
+}
+
+
+def _opencode_json(value):
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _opencode_command(tool, payload):
+    if not isinstance(payload, dict):
+        return str(payload or "")[:800]
+    for key in ("command", "cmd"):
+        if payload.get(key):
+            return str(payload[key])[:800]
+    if tool in ("edit", "write", "read", "grep", "glob"):
+        target = payload.get("filePath") or payload.get("path") or payload.get("pattern")
+        if target:
+            return f"{tool} {target}"[:800]
+    return json.dumps(payload, ensure_ascii=False)[:800]
+
+
+def _opencode_paths(payload):
+    if not isinstance(payload, dict):
+        return []
+    found = []
+    for key in ("filePath", "path", "file_path", "files"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            found.append(value)
+        elif isinstance(value, list):
+            found.extend(str(item) for item in value if isinstance(item, str))
+    return sorted({path for path in found if path})[:20]
+
+
+def collect_opencode(days, opencode_dir):
+    """Read opencode's SQLite sessions without exporting or mutating the DB."""
+    root = Path(opencode_dir).expanduser()
+    if root.is_file():
+        dbs = [root]
+    elif root.is_dir():
+        dbs = sorted(path for path in root.glob("opencode*.db")
+                     if path.is_file() and not path.name.endswith(("-wal", "-shm")))
+    else:
+        return [], 0
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff_ts = cutoff.timestamp()
+    sessions, seen = [], set()
+    for db in dbs:
+        try:
+            connection = sqlite3.connect("file:" + str(db.resolve()) + "?mode=ro", uri=True, timeout=5)
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT id, parent_id, directory, title, time_created, time_updated FROM session"
+            ).fetchall()
+        except sqlite3.Error:
+            continue
+        for row in rows:
+            sid = "opencode:" + sha256((str(db.resolve()) + ":" + str(row["id"])).encode()).hexdigest()[:16]
+            if sid in seen:
+                continue
+            parent = row["parent_id"]
+            parent_id = ("opencode:" + sha256((str(db.resolve()) + ":" + str(parent)).encode()).hexdigest()[:16]
+                         if parent else None)
+            try:
+                messages = connection.execute(
+                    "SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created",
+                    (row["id"],)).fetchall()
+            except sqlite3.Error:
+                continue
+            events = []
+            call_refs = {}
+            for message in messages:
+                meta = _opencode_json(message["data"])
+                role = str(meta.get("role") or "assistant")
+                if role not in ("user", "assistant"):
+                    continue
+                created = (meta.get("time") or {}).get("created") or message["time_created"]
+                try:
+                    at = base.iso(datetime.fromtimestamp(float(created) / 1000, timezone.utc))
+                except (TypeError, ValueError, OSError):
+                    continue
+                if base.parse_time(at).timestamp() < cutoff_ts:
+                    continue
+                try:
+                    parts = connection.execute(
+                        "SELECT time_created, data FROM part WHERE message_id = ? ORDER BY time_created",
+                        (message["id"],)).fetchall()
+                except sqlite3.Error:
+                    parts = []
+                texts = []
+                tool_events = []
+                for part in parts:
+                    payload = _opencode_json(part["data"])
+                    kind = payload.get("type")
+                    if kind == "text":
+                        text = str(payload.get("text") or "").strip()
+                        if text:
+                            texts.append(text)
+                    elif kind == "tool" and role == "assistant":
+                        state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+                        tool_raw = str(payload.get("tool") or "tool")
+                        tool = OPENCODE_TOOL_MAP.get(tool_raw, tool_raw.title())
+                        call_id = str(payload.get("callID") or "")
+                        payload_input = state.get("input")
+                        command = _opencode_command(tool_raw, payload_input)
+                        tool_events.append({
+                            "kind": "tool_call", "tool": tool,
+                            "command": base.redact(command, 1800),
+                            "paths": _opencode_paths(payload_input),
+                            "call_id": call_id, "test_like": bool(base.TEST_PATTERN.search(command)),
+                            "_result": str(state.get("output") or state.get("error") or ""),
+                            "_is_error": bool(state.get("error")) or str(state.get("status") or "") in ("error", "failed"),
+                        })
+                if texts and role in ("user", "assistant"):
+                    events.append({"id": f"{sid}:E{len(events)+1:06d}", "at": at,
+                                   "kind": "message", "role": role,
+                                   "text": base.redact("\n".join(texts), 12000)})
+                for item in tool_events:
+                    result_text = item.pop("_result")
+                    is_error = item.pop("_is_error")
+                    events.append({"id": f"{sid}:E{len(events)+1:06d}", "at": at, **item})
+                    if item.get("call_id"):
+                        call_refs[item["call_id"]] = events[-1]["id"]
+                    if result_text:
+                        events.append({"id": f"{sid}:E{len(events)+1:06d}", "at": at,
+                                       "kind": "tool_result", "tool": item["tool"],
+                                       "call_id": item.get("call_id", ""),
+                                       "call_ref": call_refs.get(item.get("call_id", "")),
+                                       "text": base.redact(result_text, 1200),
+                                       "is_error": is_error})
+            if not events:
+                continue
+            events.sort(key=lambda event: (event["at"], event["id"]))
+            started, ended = events[0]["at"], events[-1]["at"]
+            if base.parse_time(ended).timestamp() < cutoff_ts:
+                continue
+            seen.add(sid)
+            sessions.append({"id": sid, "source": "opencode", "cwd": row["directory"] or "",
+                             "parent_id": parent_id, "started_at": started, "ended_at": ended,
+                             "event_count": len(events), "source_file_count": 1,
+                             "empty_transcript": False, "events": events})
+        connection.close()
+    return sessions, len(dbs)
+
+
+def collect_local_commits(sessions, days=None):
+    """Attach repos and collect local commits for an all-local session set."""
+    by_repo = {}
+    for session in sessions:
+        cwd = session.get("cwd")
+        if not cwd:
+            continue
+        root = base.git("rev-parse", "--show-toplevel", cwd=cwd)
+        if not root:
+            continue
+        repo = str(Path(root).resolve())
+        session["repo"] = repo
+        session["repo_name"] = Path(repo).name
+        by_repo.setdefault(repo, []).append(session)
+    commits, seen, repos = [], set(), []
+    for repo, group in sorted(by_repo.items()):
+        found = base.collect_repo_commits(repo, group)
+        for commit in found:
+            key = (commit.get("repo"), commit.get("sha"))
+            if key not in seen:
+                seen.add(key)
+                commits.append(commit)
+        repos.append({"path": repo, "name": Path(repo).name,
+                      "sessions": len(group), "commits": len(found)})
+    commits.sort(key=lambda commit: commit.get("at") or "")
+    return commits, repos
+
+
+def collect_all_local(days, codex_dir, claude_dir, hermes_db, dsh_dir=None, opencode_dir="~/.local/share/opencode"):
     claude = base.collect_all_claude(days, claude_dir)
     codex, codex_files = collect_codex(days, codex_dir)
     hermes, hermes_records = collect_hermes(days, hermes_db)
     deepseek, deepseek_files = collect_deepseek(days, dsh_dir)
-    sessions = claude["sessions"] + codex + hermes + deepseek
+    opencode, opencode_dbs = collect_opencode(days, opencode_dir)
+    sessions = claude["sessions"] + codex + hermes + deepseek + opencode
     sessions.sort(key=lambda session: session["started_at"])
     stats, touched = _session_counts(sessions)
-    coverage = {"files_scanned": claude["coverage"]["files_scanned"] + codex_files + hermes_records + deepseek_files,
+    coverage = {"files_scanned": claude["coverage"]["files_scanned"] + codex_files + hermes_records + deepseek_files + opencode_dbs,
                 "matched_files": len(sessions), "matched_sessions": len(sessions),
                 "sources": dict(Counter(session["source"] for session in sessions)),
                 "main_sessions": sum(not session.get("parent_id") for session in sessions),
@@ -266,10 +449,12 @@ def collect_all_local(days, codex_dir, claude_dir, hermes_db, dsh_dir=None):
             "touched_paths": touched, "commits": []}
 
 
-def collect_project(project, days, codex_dir, claude_dir, hermes_db, dsh_dir=None):
+def collect_project(project, days, codex_dir, claude_dir, hermes_db, dsh_dir=None,
+                    opencode_dir="~/.local/share/opencode"):
     project = base.canonical_project(project)
     hermes, _ = collect_hermes(days, hermes_db)
     deepseek, _ = collect_deepseek(days, dsh_dir)
-    selected = [session for session in hermes + deepseek
+    opencode, _ = collect_opencode(days, opencode_dir)
+    selected = [session for session in hermes + deepseek + opencode
                 if base.project_matches(session["cwd"], project)]
     return base.collect(project, days, codex_dir, claude_dir, extra_sessions=selected)

@@ -17,7 +17,9 @@ from pathlib import Path
 import re
 import sys
 import socket
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib import error as urlerror
 from urllib import request
 
@@ -158,7 +160,19 @@ def session_facts(session):
 
 
 def commit_groups(commits, sessions):
-    """Reproduce PR groups, two-hour clusters, then individual commits."""
+    """Reproduce PR groups, two-hour clusters, then individual commits, per repo."""
+    by_repo = {}
+    for commit in commits:
+        by_repo.setdefault(commit.get("repo"), []).append(commit)
+    groups = []
+    for repo, repo_commits in by_repo.items():
+        repo_sessions = (sessions if repo is None else
+                         [s for s in sessions if not s.get("repo") or s.get("repo") == repo])
+        groups.extend(_group_repo_commits(repo_commits, repo_sessions, repo))
+    return groups
+
+
+def _group_repo_commits(commits, sessions, repo):
     normalized = sorted((dict(c) for c in commits if base.parse_time(c.get("at"))),
                         key=lambda c: c["at"])
     groups, used = [], set()
@@ -167,7 +181,7 @@ def commit_groups(commits, sessions):
         selected = [c for c in normalized if c["sha"] not in used and
                     re.search(r"#" + re.escape(number) + r"\b", c.get("subject", ""))]
         if selected:
-            groups.append(make_group("pr", f"PR #{number}", selected, number))
+            groups.append(make_group("pr", f"PR #{number}", selected, number, repo=repo))
             used.update(c["sha"] for c in selected)
     remaining = [c for c in normalized if c["sha"] not in used]
     runs, current = [], []
@@ -180,19 +194,20 @@ def commit_groups(commits, sessions):
         runs.append(current)
     for run in runs:
         if len(run) > 1:
-            groups.append(make_group("commit_cluster", f"{len(run)} commits: {run[0].get('subject','')[:60]}", run))
+            groups.append(make_group("commit_cluster", f"{len(run)} commits: {run[0].get('subject','')[:60]}", run, repo=repo))
             used.update(c["sha"] for c in run)
     for commit in normalized:
         if commit["sha"] not in used:
-            groups.append(make_group("single_commit", commit.get("subject", "")[:100], [commit]))
+            groups.append(make_group("single_commit", commit.get("subject", "")[:100], [commit], repo=repo))
     return groups
 
 
-def make_group(kind, title, commits, pr=None):
+def make_group(kind, title, commits, pr=None, repo=None):
     shas = [c["sha"] for c in commits]
     return {"id": f"{kind}:{shas[0][:12]}", "group_type": kind, "title": title,
             "pr_number": pr, "commit_shas": shas, "earliest_commit_at": commits[0]["at"],
-            "latest_commit_at": commits[-1]["at"],
+            "latest_commit_at": commits[-1]["at"], "repo": repo,
+            "repo_name": Path(repo).name if repo else None,
             "branch": commits[0].get("branch") if kind != "pr" else None,
             "branch_source": commits[0].get("branch_source") if kind != "pr" else None,
             "insertions": sum(c.get("insertions", 0) for c in commits),
@@ -201,6 +216,10 @@ def make_group(kind, title, commits, pr=None):
 
 
 def best_link(group, session):
+    group_repo = group.get("repo")
+    session_repo = session.get("repo")
+    if group_repo and group_repo != session_repo:
+        return None
     facts = session_facts(session)
     if group["pr_number"] and group["pr_number"] in facts["pr_numbers"]:
         return "pr_match", 1.0
@@ -592,6 +611,25 @@ def fingerprint(value):
     return sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def _parallel_map(items, worker, workers):
+    """Yield (item, result, error) as each worker finishes, preserving no order."""
+    if workers <= 1:
+        for item in items:
+            try:
+                yield item, worker(item), None
+            except Exception as exc:
+                yield item, None, exc
+        return
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(worker, item): item for item in items}
+        for future in as_completed(futures):
+            item = futures[future]
+            try:
+                yield item, future.result(), None
+            except Exception as exc:
+                yield item, None, exc
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Reproduce three public Paxel client stages on local history")
     parser.add_argument("project", type=Path, nargs="?", default=Path("."))
@@ -601,15 +639,19 @@ def main(argv=None):
     parser.add_argument("--all-claude", action="store_true",
                         help="Analyze all Claude Code projects, transcripts only")
     parser.add_argument("--all-local", action="store_true",
-                        help="Analyze local Claude Code, Codex, Hermes, and DeepSeek sessions")
+                        help="Analyze local Claude Code, Codex, Hermes, DeepSeek, and opencode sessions")
     parser.add_argument("--sources",
-                        help="Comma-separated source filter: claude,codex,hermes,deepseek")
+                        help="Comma-separated source filter: claude,codex,hermes,deepseek,opencode")
     parser.add_argument("--max-parts", type=int, default=0,
                         help="Skip sessions that need more than N narrative parts (0 = no limit)")
+    parser.add_argument("--concurrency", type=int, default=4,
+                        help="Parallel model calls (1 = serial)")
     parser.add_argument("--hermes-db", default="~/.hermes/state.db",
                         help="Hermes SQLite session database (read-only)")
     parser.add_argument("--dsh-dir", type=Path,
                         help="DeepSeek harness session directory (defaults to DSH_HOME/sessions or local discovery)")
+    parser.add_argument("--opencode-dir", default="~/.local/share/opencode",
+                        help="opencode data directory or a single opencode*.db file")
     parser.add_argument("--output-dir", type=Path, default=Path("paxel-reproduction"))
     parser.add_argument("--pr-diff-dir", type=Path, help="Directory containing pr-N.diff files exported locally")
     parser.add_argument("--base-ref", help="Git base ref for local refs/pull/N/head diffs")
@@ -621,6 +663,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days must be positive")
+    if args.concurrency < 1:
+        parser.error("--concurrency must be positive")
     project = base.canonical_project(args.project)
     try:
         prompt_bundle = profiles.load(args.prompt_profile)
@@ -631,13 +675,15 @@ def main(argv=None):
               file=sys.stderr)
     if args.all_local and args.all_claude:
         parser.error("--all-local and --all-claude are mutually exclusive")
-    evidence = (multi.collect_all_local(args.days, args.codex_dir, args.claude_dir, args.hermes_db, args.dsh_dir)
+    evidence = (multi.collect_all_local(args.days, args.codex_dir, args.claude_dir, args.hermes_db,
+                                        args.dsh_dir, args.opencode_dir)
                 if args.all_local else base.collect_all_claude(args.days, args.claude_dir)
                 if args.all_claude else multi.collect_project(
-                    project, args.days, args.codex_dir, args.claude_dir, args.hermes_db, args.dsh_dir))
+                    project, args.days, args.codex_dir, args.claude_dir, args.hermes_db,
+                    args.dsh_dir, args.opencode_dir))
     if args.sources:
         wanted = {item.strip() for item in args.sources.split(",") if item.strip()}
-        known = {"claude", "codex", "hermes", "deepseek"}
+        known = {"claude", "codex", "hermes", "deepseek", "opencode"}
         unknown = wanted - known
         if unknown:
             parser.error("unknown --sources values: " + ", ".join(sorted(unknown)))
@@ -646,6 +692,7 @@ def main(argv=None):
             parser.error("no sessions matched --sources " + ",".join(sorted(wanted)))
         coverage = evidence.setdefault("coverage", {})
         coverage["matched_sessions"] = len(evidence["sessions"])
+        coverage["sources"] = dict(Counter(s.get("source", "unknown") for s in evidence["sessions"]))
         coverage["main_sessions"] = sum(1 for s in evidence["sessions"] if not s.get("parent_id"))
         coverage["subagent_sessions"] = sum(1 for s in evidence["sessions"] if s.get("parent_id"))
         coverage["user_messages"] = sum(
@@ -654,6 +701,11 @@ def main(argv=None):
         )
     if not evidence["sessions"]:
         parser.error("No matching local sessions")
+    if args.all_local:
+        commits, repos = multi.collect_local_commits(evidence["sessions"])
+        evidence["commits"] = commits
+        evidence["coverage"]["commits_in_window"] = len(commits)
+        evidence["coverage"]["repos"] = repos
     groups = commit_groups(evidence["commits"], evidence["sessions"])
     episodes = link_episodes(groups, evidence["sessions"])
     diffs = {group["id"]: extra.group_diff(project, group, args.pr_diff_dir, args.base_ref) for group in groups}
@@ -678,7 +730,11 @@ def main(argv=None):
         if not key:
             parser.error("GLM_API_KEY is missing; no model request sent")
         previous_narratives = read_json(out / "session_narratives.json")
-        for session in evidence["sessions"]:
+        lock = threading.Lock()
+        narratives = {session["id"]: {} for session in evidence["sessions"]}
+        total = len(evidence["sessions"])
+
+        def narrate_one(session):
             prompt_material = ([prompt_bundle["narrative"], prompt_bundle["merge"]]
                                if args.prompt_profile == "v15-v5" else [NARRATIVE_PROMPT, MERGE_PROMPT])
             digest = fingerprint({"input": narrative_inputs[session["id"]],
@@ -686,36 +742,74 @@ def main(argv=None):
                                   "prompt_profile": args.prompt_profile})
             previous = previous_narratives.get(session["id"], {})
             if previous.get("status") == "generated" and previous.get("input_hash") == digest:
-                narratives[session["id"]] = previous
-                continue
+                return previous
             try:
-                narratives[session["id"]] = narrate_session(session, key, args.model, args.endpoint,
-                                                            profile=args.prompt_profile, prompts=prompt_bundle,
-                                                            max_parts=args.max_parts)
+                result = narrate_session(session, key, args.model, args.endpoint,
+                                         profile=args.prompt_profile, prompts=prompt_bundle,
+                                         max_parts=args.max_parts)
             except Exception as exc:
-                narratives[session["id"]] = {"status": "failed", "error": type(exc).__name__}
-            narratives[session["id"]]["input_hash"] = digest
-            save(out / "session_narratives.json", narratives)
-        for session in evidence["sessions"]:
+                result = {"status": "failed", "error": type(exc).__name__}
+            result["input_hash"] = digest
+            return result
+
+        done = 0
+        for session, result, error in _parallel_map(evidence["sessions"], narrate_one, args.concurrency):
+            if error:
+                result = {"status": "failed", "error": type(error).__name__}
+            with lock:
+                narratives[session["id"]] = result
+                done += 1
+                save(out / "session_narratives.json", narratives)
+                print(f"[narratives {done}/{total}] {session['id']}: {result.get('status')}", file=sys.stderr)
+
+        def classify_one(session):
             if not decisions[session["id"]]:
-                continue
+                return decisions[session["id"]]
             try:
-                decisions[session["id"]] = extra.classify_decisions(
+                return extra.classify_decisions(
                     decisions[session["id"]], key, args.model, args.endpoint, glm_text,
                     profile=args.prompt_profile, prompts=prompt_bundle)
             except Exception:
-                pass  # Keep explicitly unclassified candidates.
-            save(out / "decision_exchanges.json", decisions)
-        for group in groups:
+                return decisions[session["id"]]
+
+        done = 0
+        total = sum(1 for session in evidence["sessions"] if decisions[session["id"]])
+        for session, result, error in _parallel_map(evidence["sessions"], classify_one, args.concurrency):
+            if not decisions[session["id"]]:
+                continue
+            with lock:
+                decisions[session["id"]] = result
+                done += 1
+                save(out / "decision_exchanges.json", decisions)
+                print(f"[decisions {done}/{total}] {session['id']}", file=sys.stderr)
+
+        def review_one(group):
             try:
-                reviews[group["id"]] = extra.review_diff(diffs[group["id"]], key, args.model, args.endpoint, glm_text)
+                return extra.review_diff(diffs[group["id"]], key, args.model, args.endpoint, glm_text)
             except Exception as exc:
-                reviews[group["id"]]["review_error"] = type(exc).__name__
-            save(out / "code_reviews.json", reviews)
+                result = dict(reviews[group["id"]])
+                result["review_error"] = type(exc).__name__
+                return result
+
+        done = 0
+        total = len(groups)
+        for group, result, error in _parallel_map(groups, review_one, args.concurrency):
+            if error:
+                result = dict(reviews[group["id"]])
+                result["review_error"] = type(error).__name__
+            with lock:
+                reviews[group["id"]] = result
+                done += 1
+                save(out / "code_reviews.json", reviews)
+                print(f"[reviews {done}/{total}] {group['id']}", file=sys.stderr)
+
         previous_scores = read_json(out / "episode_scores.json")
         episode_inputs = {ep["id"]: episode_input(ep, groups, evidence["sessions"], narratives, decisions, reviews) for ep in episodes}
         save(out / "episode_inputs.json", episode_inputs)
-        for episode in episodes:
+        scores = {episode["id"]: {} for episode in episodes}
+        total = len(episodes)
+
+        def score_one(episode):
             data = episode_inputs[episode["id"]]
             prompt_material = (prompt_bundle["scoring"]
                                if args.prompt_profile == "v15-v5" else SCORING_PROMPT)
@@ -723,15 +817,24 @@ def main(argv=None):
                                   "prompt_profile": args.prompt_profile})
             previous = previous_scores.get(episode["id"], {})
             if previous.get("status") == "scored" and previous.get("input_hash") == digest:
-                scores[episode["id"]] = previous
-                continue
+                return previous
             try:
-                scores[episode["id"]] = score_episode(data, key, args.model, args.endpoint,
-                                                      profile=args.prompt_profile, prompts=prompt_bundle)
+                result = score_episode(data, key, args.model, args.endpoint,
+                                       profile=args.prompt_profile, prompts=prompt_bundle)
             except Exception as exc:
-                scores[episode["id"]] = {"status": "failed", "error": type(exc).__name__}
-            scores[episode["id"]]["input_hash"] = digest
-            save(out / "episode_scores.json", scores)
+                result = {"status": "failed", "error": type(exc).__name__}
+            result["input_hash"] = digest
+            return result
+
+        done = 0
+        for episode, result, error in _parallel_map(episodes, score_one, args.concurrency):
+            if error:
+                result = {"status": "failed", "error": type(error).__name__}
+            with lock:
+                scores[episode["id"]] = result
+                done += 1
+                save(out / "episode_scores.json", scores)
+                print(f"[scores {done}/{total}] {episode['id']}: {result.get('status')}", file=sys.stderr)
     else:
         save(out / "episode_inputs.json", {ep["id"]: episode_input(ep, groups, evidence["sessions"], narratives, decisions, reviews)
                                            for ep in episodes})
