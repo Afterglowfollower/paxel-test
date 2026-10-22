@@ -120,7 +120,7 @@ npx --yes github:Afterglowfollower/paxel-test --all-local --sources claude,codex
 | `--all-local` | 五种来源 + 逐仓库 Git 提交 |
 | `--project PATH` | 单个项目；读取该项目下的会话和本地 Git |
 | `--sources LIST` | 逗号分隔的来源过滤，默认全部 |
-| `--days N` | 最近 N 天，默认 90 |
+| `--days N` | 最近 N 天，默认 90；`0` 表示不限时间范围 |
 | `--output-dir PATH` | 报告目录；Node 入口默认 `./paxel-report`，Python 入口默认 `./paxel-reproduction` |
 | `--score` / `--no-score` | 有 Key 或 `--relay` 时默认调用模型评价；`--no-score` 只做本地证据报告；两者都没有时自动降级为本地报告 |
 | `--api-key-file PATH` | 从指定文件读取 key；默认 `~/.config/paxel-test/ark_api_key` |

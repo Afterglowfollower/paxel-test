@@ -32,7 +32,7 @@ if (has('--help') || has('-h')) {
   --dsh-dir PATH       DeepSeek harness 的 sessions 目录
   --opencode-dir PATH  opencode 数据目录或单个 opencode*.db
   --concurrency N      模型调用并发数，默认 4；1 = 串行
-  --days N             分析最近 N 天，默认 90
+  --days N             分析最近 N 天，默认 90；0 = 不限时间范围
   --output-dir PATH    报告目录，默认 ./paxel-report
   --score              强制调用模型；需要 ARK_API_KEY 或 --relay
   --api-key-file PATH  从指定文件读取 key（默认 ~/.config/paxel-test/ark_api_key）

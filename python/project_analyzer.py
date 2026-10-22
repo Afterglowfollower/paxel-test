@@ -138,6 +138,13 @@ def git(*args, cwd, timeout=15):
         return ""
 
 
+def window_cutoff(days):
+    """Start of the analysis window. days <= 0 means no lower bound."""
+    if not days or days <= 0:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - timedelta(days=days)
+
+
 def canonical_project(path):
     path = Path(path).expanduser().resolve()
     if not path.is_dir():
@@ -449,7 +456,7 @@ def collect_repo_commits(project, sessions):
 
 
 def collect(project, days, codex_dir, claude_dir, extra_sessions=None):
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = window_cutoff(days)
     sessions = []
     files_seen = 0
     touched_matches = 0
@@ -511,7 +518,7 @@ def collect_all_claude(days, claude_dir):
     run cannot attribute one repository's commits to every Claude bucket.
     """
     root = Path(claude_dir).expanduser()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = window_cutoff(days)
     sessions = []
     files = list(root.rglob("*.jsonl")) if root.is_dir() else []
     for path in files:

@@ -738,7 +738,8 @@ def relay_endpoint(url):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Reproduce three public Paxel client stages on local history")
     parser.add_argument("project", type=Path, nargs="?", default=Path("."))
-    parser.add_argument("--days", type=int, default=90)
+    parser.add_argument("--days", type=int, default=90,
+                        help="Only analyze the last N days; 0 means no lower bound")
     parser.add_argument("--codex-dir", default="~/.codex/sessions")
     parser.add_argument("--claude-dir", default="~/.claude/projects")
     parser.add_argument("--all-claude", action="store_true",
@@ -779,8 +780,8 @@ def main(argv=None):
     parser.add_argument("--endpoint", help="Ark Chat Completions URL")
     args = parser.parse_args(argv)
     global REQUEST_TIMEOUT
-    if args.days < 1:
-        parser.error("--days must be positive")
+    if args.days < 0:
+        parser.error("--days must be zero or positive")
     if args.concurrency < 1:
         parser.error("--concurrency must be positive")
     if args.request_timeout < 1:

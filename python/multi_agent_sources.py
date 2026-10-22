@@ -27,7 +27,7 @@ def _session_counts(sessions):
 
 def collect_codex(days, codex_dir):
     root = Path(codex_dir).expanduser()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = base.window_cutoff(days)
     sessions = []
     files = list(root.rglob("*.jsonl")) if root.is_dir() else []
     for path in files:
@@ -62,7 +62,7 @@ def collect_hermes(days, hermes_db):
     db = Path(hermes_db).expanduser()
     if not db.is_file():
         return [], 0
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+    cutoff = base.window_cutoff(days).timestamp()
     uri = "file:" + str(db.resolve()) + "?mode=ro"
     sessions = []
     try:
@@ -181,7 +181,7 @@ def collect_deepseek(days, dsh_dir):
     roots = list(dict.fromkeys(candidate.resolve() for candidate in candidates if candidate.is_dir()))
     if not roots:
         return [], 0
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = base.window_cutoff(days)
     files = sorted({path for root in roots for path in
                     list(root.rglob("session*.v4.jsonl")) + list(root.rglob("session*.v4.jsonl.zstd"))})
     sessions = []
@@ -304,7 +304,7 @@ def collect_opencode(days, opencode_dir):
                      if path.is_file() and not path.name.endswith(("-wal", "-shm")))
     else:
         return [], 0
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = base.window_cutoff(days)
     cutoff_ts = cutoff.timestamp()
     sessions, seen = [], set()
     for db in dbs:
