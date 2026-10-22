@@ -287,7 +287,7 @@ def link_episodes(groups, sessions):
 def glm_text(system, user, key, model, endpoint, attempts=2, timeout=240):
     if endpoint not in base.GLM_ENDPOINTS:
         raise ValueError("Endpoint must be one of the official GLM Chat Completions URLs")
-    body = json.dumps({"model": model, "stream": False,
+    body = json.dumps({"model": model, "stream": False, "max_tokens": 8192,
                        "messages": [{"role": "system", "content": system},
                                     {"role": "user", "content": user}]}, ensure_ascii=False).encode()
     req = request.Request(endpoint, data=body,
@@ -408,8 +408,7 @@ def score_episode(data, key, model, endpoint, caller=None, profile="local", prom
         raw = caller((prompts or {})["scoring"], profiles.episode_user_message(data), key, model, endpoint)
     else:
         raw = caller(SCORING_PROMPT, fenced(json.dumps(data, ensure_ascii=False)), key, model, endpoint)
-    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
-    parsed = json.loads(raw)
+    parsed = parse_json_object(raw)
     scores = parsed.get("scores")
     if not isinstance(scores, dict):
         raise ValueError("Scorer returned no scores object")
@@ -506,6 +505,19 @@ def person_input(evidence, groups, episodes, scores, decisions):
             "decision_examples": examples, "episodes": scored}
 
 
+def parse_json_object(raw):
+    """Parse a JSON object even when the model adds prose or code fences."""
+    text = raw.strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(text[start:end + 1])
+        raise
+
+
 def synthesize_person(data, key, model, endpoint, caller=None):
     if not data["episodes"]:
         return {"status": "unscored", "headline": "已采集工作记录，尚未形成个人评价。",
@@ -516,7 +528,7 @@ def synthesize_person(data, key, model, endpoint, caller=None):
                 "limitations": ["缺少模型对跨会话行为和结果的综合判断。"]}
     caller = caller or glm_text
     raw = caller(PERSON_PROMPT, fenced(json.dumps(data, ensure_ascii=False)), key, model, endpoint)
-    parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip()))
+    parsed = parse_json_object(raw)
     if not isinstance(parsed, dict) or not isinstance(parsed.get("axis_assessments"), dict):
         raise ValueError("Person synthesis returned no axis assessments")
     known = {episode["episode_id"] for episode in data["episodes"]}
