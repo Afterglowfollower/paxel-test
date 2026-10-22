@@ -153,6 +153,56 @@ npx --yes github:Afterglowfollower/paxel-test --all-local
 
 `--score` 期间每完成一个阶段会增量写 JSON；`report.html` 是最后一次性生成的。想先立刻看本地覆盖情况，可以先跑 `--no-score`，之后再跑 `--score`（需要 Key）覆盖成完整报告。没有 Key 且没加 `--no-score` 时，命令在解析参数阶段就会报错。
 
+## 事件轨迹（trajectory）
+
+每次运行除了 `report.html`，还会生成：
+
+- `trajectory.json`：每个会话的 typed events、信号、steering、决策链和结果；
+- `trajectory.html`：本地时间线视图，按事件数展示前 40 个会话。
+
+事件类型对齐公开客户端的 `EventExtractor`：
+
+```text
+file_edit / file_create / file_read
+git_commit / git_branch_switch / git_push
+test_run
+error_encountered
+bash_command
+user_directive
+agent_proposal
+subagent_dispatch / subagent_return
+```
+
+`agent_thinking` 只有在来源本身保留 thinking block 时才会出现；当前多数本地来源只保存可见消息。
+
+每个会话还会计算 Paxel 风格的 `session_signals`，例如：
+
+```text
+tool_count / unique_tools / tools_per_message
+duration_minutes / messages_per_minute
+git_commit_count / files_modified_count
+test_run_count / test_pass_rate / tdd_discipline_ratio
+error_count / recovery_speed / error_retry_ratio
+plan_mode_used / task_tool_used / worktree_used
+imperative_prompts / confirmation_requests / kill_decisions
+self_corrections / critiques / domain_corrections
+hypothesis_driven / debugging_messages / architecture_discussions
+substantive_messages / terse_messages / substantive_ratio
+```
+
+Steering 使用公开客户端的 10 类：`explore / constrain / delegate / inspect / reject / redirect / verify / ship / debug / recover`。
+
+决策层会生成：
+
+- `decision_edges`：同一会话内相邻决策的 `compounds` 链；
+- `outcomes`：决策回应之后最近的 commit / test / error / file edit，带 `outcome_signal`、距离和时间层。
+
+这些是**确定性近似**，不是 Paxel 服务端的 LLM outcome analysis；链检测按时间相邻分组，不做语义相似度/embedding。离线检查：
+
+```bash
+python3 tools/smoke-trajectory.py
+```
+
 ## Prompt profile
 
 默认使用本仓库独立编写的 prompt（`--prompt-profile local`）。如果要对齐公开客户端里的三处 prompt，先在仓库根目录运行：
@@ -210,6 +260,8 @@ python3 tools/smoke-prompt-profiles.py
 - 不支持 Cursor；opencode 已支持；
 - `--all-local` 的 Git 提交只来自本地仓库，不联网拉 PR；
 - 不执行测试、不验证部署，测试通过与否只依据可见日志；
+- `trajectory.json` 是确定性近似：没有服务端 LLM outcome analysis，没有 embedding/语义链，也没有 step 级环境状态；
+- `agent_thinking` 仅在来源保留 thinking block 时可用；
 - 原版 v16/v6 prompt 和最终人物合成在服务端，公开 artifact 拿不到；
 - `--score` 的人物综合是本地实现，不是官方同分。
 

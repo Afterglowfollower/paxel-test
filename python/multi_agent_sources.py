@@ -107,9 +107,15 @@ def collect_hermes(days, hermes_db):
                                 continue
                             function = call.get("function") or {}
                             name = str(function.get("name") or call.get("name") or "tool")
-                            command = base.command_from_input(function.get("arguments") or call.get("input"))
+                            arguments = function.get("arguments") or call.get("input")
+                            if isinstance(arguments, str):
+                                try:
+                                    arguments = json.loads(arguments)
+                                except ValueError:
+                                    pass
+                            command = base.command_from_input(arguments)
                             add("tool_call", tool=name, command=base.redact(command, 1800),
-                                paths=base.paths_from_input(function.get("arguments"), command),
+                                paths=base.paths_from_input(arguments, command),
                                 call_id=str(call.get("id") or ""),
                                 test_like=bool(base.TEST_PATTERN.search(command)))
                             if call.get("id"):

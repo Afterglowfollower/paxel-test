@@ -39,7 +39,7 @@ if (raw.includes('--help') || raw.includes('-h')) {
   --no-score           只生成本地证据报告，不调用模型
   --model NAME         模型 ID；方舟默认 doubao-seed-2-1-pro-260915
 
-报告在输出目录的 report.html。完整底层参数见 python/paxel_reproduction.py。
+报告在输出目录的 report.html；同时生成 trajectory.json / trajectory.html（事件轨迹与信号）。完整底层参数见 python/paxel_reproduction.py。
 `);
   process.exit(0);
 }

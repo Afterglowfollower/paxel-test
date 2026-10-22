@@ -27,6 +27,7 @@ import project_analyzer as base
 import multi_agent_sources as multi
 import paxel_evidence as extra
 import prompt_profiles as profiles
+import trajectory as trajectory_mod
 
 
 VERSION = "reproduction.v1"
@@ -575,10 +576,12 @@ def synthesize_person(data, key, model, endpoint, caller=None):
             "limitations": strings("limitations", 4)}
 
 
-def render_html(evidence, groups, episodes, narratives, scores, decisions=None, reviews=None, diffs=None, person=None):
+def render_html(evidence, groups, episodes, narratives, scores, decisions=None, reviews=None, diffs=None, person=None, trajectory=False):
     person = person or synthesize_person(person_input(evidence, groups, episodes, scores, decisions or {}), None, None, None)
     coverage = person_input(evidence, groups, episodes, scores, decisions or {})["coverage"]
     scored = person.get("status") == "scored"
+    trajectory_link = ('<p><a href="trajectory.html">查看事件轨迹与信号 →</a></p>'
+                       if trajectory else '')
     def claims(items):
         return "<ul>" + "".join(f"<li>{escape(item['observation'])}<small>证据：{escape(', '.join(item['episode_ids']))}</small></li>" for item in items) + "</ul>" if items else "<p class='muted'>尚无经核对的跨会话结论。</p>"
     def profile_card(question, field):
@@ -596,8 +599,8 @@ def render_html(evidence, groups, episodes, narratives, scores, decisions=None, 
         metric("确认的决策", coverage["confirmed_decisions"], "候选需经模型确认"),
         metric("代码结果", coverage["commit_groups"], "可关联的提交组")])
     source_mix = "、".join(f"{source} {count}" for source, count in sorted(coverage["sources"].items()))
-    trajectory_link = ('<p><a href="codex-trajectories.html">查看 Codex 会话与 agent 调用轨迹</a></p>'
-                       if any(s.get("source") == "codex" for s in evidence["sessions"]) else "")
+    codex_link = ('<p><a href="codex-trajectories.html">查看 Codex 会话与 agent 调用轨迹</a></p>'
+                  if any(s.get("source") == "codex" for s in evidence["sessions"]) else "")
     limitations = list(person.get("limitations", []))
     if coverage["commit_groups"] == 0:
         limitations.append("本次跨项目汇总没有关联 Git 提交和 PR 结果，不能据此判断交付质量。")
@@ -605,9 +608,7 @@ def render_html(evidence, groups, episodes, narratives, scores, decisions=None, 
         limitations.append(f"仅 {coverage['scored_episodes']} / {coverage['episodes']} 个工作片段完成模型分析。")
     status = "已完成跨会话评价" if scored else "仅完成证据采集 · 人物评价待生成"
     limit_items = "".join(f"<li>{escape(item)}</li>" for item in limitations)
-    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI 协作方式 · 个人报告</title><style>body{{margin:0;background:#fbfaf7;color:#24221f;font:16px/1.7 -apple-system,BlinkMacSystemFont,sans-serif}}main{{max-width:920px;margin:auto;padding:40px 24px 90px}}header{{border-top:3px solid #f07832;padding:28px 0}}h1{{font-size:40px;line-height:1.25;max-width:820px}}h2{{font-size:22px;margin-bottom:10px}}h3{{margin-bottom:3px}}section{{border-top:1px solid #ded7cb;padding:25px 0}}p{{max-width:780px}}.eyebrow{{color:#a34b22;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}}.muted,small{{color:#756f67}}.profile,.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}}.profile-card,.metric{{background:white;border:1px solid #e5dfd7;border-radius:10px;padding:16px}}.profile-card span,.metric span{{display:block;color:#8c4b2d;font-size:13px}}.profile-card b,.metric b{{display:block;font-size:22px;margin-top:6px}}.profile-card p{{font-size:14px;margin:4px 0}}.metric small{{display:block;font-size:12px}}li{{margin:10px 0}}li small{{display:block;font-size:12px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:12px 8px;border-bottom:1px solid #e5dfd7;text-align:left;vertical-align:top}}td:nth-child(2){{font-weight:700;white-space:nowrap}}.notice{{background:#fff0e6;padding:15px;border-left:3px solid #f07832}}</style></head><body><main><header><div class="eyebrow">个人综合报告 · 独立复现原型</div><p class="muted">{escape(evidence['project_name'])} · {escape(status)} · prompt profile: {escape(person.get('prompt_profile') or 'local')} · 非 Paxel 官方报告</p><h1>{escape(person.get('headline') or '正在整理这位开发者与 AI 的协作方式')}</h1>{trajectory_link}</header><section><div class="profile">{profile_card('他倾向于怎样构建？','builder_type')}{profile_card('他如何与 AI 协作？','collaboration_style')}</div></section><section><h2>从记录中能确认什么</h2><div class="metrics">{metrics}</div><p class="muted">来源：{escape(source_mix)}。这些是使用方式和证据覆盖，并不是能力分数。</p></section><section><h2>做了什么</h2><p>{escape(person.get('what_built') or '会话已解析，但尚未完成跨会话任务与结果核对。')}</p></section><section><h2>反复出现的决策方式</h2>{claims(person.get('decision_patterns', []))}</section><section><h2>体现出的优势</h2>{claims(person.get('strengths', []))}</section><section><h2>下一步最值得改进的地方</h2>{claims(person.get('growth_areas', []))}</section><section><h2>五维评价依据</h2><p class="muted">原版公开客户端的五个内部维度；先解释证据，再给分数。没有直接证据时留空。</p><table><tr><th>维度</th><th>综合分</th><th>判断依据</th></tr>{axis_rows}</table></section><section><h2>判断边界</h2><ul>{limit_items}</ul><p class="muted">内部使用 {coverage['episodes']} 个工作片段，其中 {coverage['scored_episodes']} 个完成模型分析；{coverage['decision_candidates']} 条决策候选尚不能直接等同确认的决策。</p></section></main></body></html>'''
-
-
+    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI 协作方式 · 个人报告</title><style>body{{margin:0;background:#fbfaf7;color:#24221f;font:16px/1.7 -apple-system,BlinkMacSystemFont,sans-serif}}main{{max-width:920px;margin:auto;padding:40px 24px 90px}}header{{border-top:3px solid #f07832;padding:28px 0}}h1{{font-size:40px;line-height:1.25;max-width:820px}}h2{{font-size:22px;margin-bottom:10px}}h3{{margin-bottom:3px}}section{{border-top:1px solid #ded7cb;padding:25px 0}}p{{max-width:780px}}.eyebrow{{color:#a34b22;font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}}.muted,small{{color:#756f67}}.profile,.metrics{{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}}.profile-card,.metric{{background:white;border:1px solid #e5dfd7;border-radius:10px;padding:16px}}.profile-card span,.metric span{{display:block;color:#8c4b2d;font-size:13px}}.profile-card b,.metric b{{display:block;font-size:22px;margin-top:6px}}.profile-card p{{font-size:14px;margin:4px 0}}.metric small{{display:block;font-size:12px}}li{{margin:10px 0}}li small{{display:block;font-size:12px}}table{{width:100%;border-collapse:collapse}}th,td{{padding:12px 8px;border-bottom:1px solid #e5dfd7;text-align:left;vertical-align:top}}td:nth-child(2){{font-weight:700;white-space:nowrap}}.notice{{background:#fff0e6;padding:15px;border-left:3px solid #f07832}}</style></head><body><main><header><div class="eyebrow">个人综合报告 · 独立复现原型</div><p class="muted">{escape(evidence['project_name'])} · {escape(status)} · prompt profile: {escape(person.get('prompt_profile') or 'local')} · 非 Paxel 官方报告</p><h1>{escape(person.get('headline') or '正在整理这位开发者与 AI 的协作方式')}</h1>{codex_link}{trajectory_link}</header><section><div class="profile">{profile_card('他倾向于怎样构建？','builder_type')}{profile_card('他如何与 AI 协作？','collaboration_style')}</div></section><section><h2>从记录中能确认什么</h2><div class="metrics">{metrics}</div><p class="muted">来源：{escape(source_mix)}。这些是使用方式和证据覆盖，并不是能力分数。</p></section><section><h2>做了什么</h2><p>{escape(person.get('what_built') or '会话已解析，但尚未完成跨会话任务与结果核对。')}</p></section><section><h2>反复出现的决策方式</h2>{claims(person.get('decision_patterns', []))}</section><section><h2>体现出的优势</h2>{claims(person.get('strengths', []))}</section><section><h2>下一步最值得改进的地方</h2>{claims(person.get('growth_areas', []))}</section><section><h2>五维评价依据</h2><p class="muted">原版公开客户端的五个内部维度；先解释证据，再给分数。没有直接证据时留空。</p><table><tr><th>维度</th><th>综合分</th><th>判断依据</th></tr>{axis_rows}</table></section><section><h2>判断边界</h2><ul>{limit_items}</ul><p class="muted">内部使用 {coverage['episodes']} 个工作片段，其中 {coverage['scored_episodes']} 个完成模型分析；{coverage['decision_candidates']} 条决策候选尚不能直接等同确认的决策。</p></section></main></body></html>'''
 def render_codex_trajectories(evidence):
     """Render the selected project's Codex events and parent/child sessions locally."""
     sessions = [s for s in evidence["sessions"] if s.get("source") == "codex"]
@@ -834,6 +835,7 @@ def main(argv=None):
                  for session in evidence["sessions"]}
     reviews = {group["id"]: extra.preliminary_review(diffs[group["id"]]) for group in groups}
     out = args.output_dir
+    trajectory = trajectory_mod.build(evidence["sessions"], decisions)
     save(out / "evidence.json", evidence)
     save(out / "commit_groups.json", groups)
     save(out / "episodes.json", episodes)
@@ -843,6 +845,8 @@ def main(argv=None):
     narrative_inputs = {s["id"]: {"parts": transcript_parts(s), "event_count": len(s["events"])}
                         for s in evidence["sessions"]}
     save(out / "narrative_inputs.json", narrative_inputs)
+    save(out / "trajectory.json", trajectory)
+    (out / "trajectory.html").write_text(trajectory_mod.render_html(trajectory), encoding="utf-8")
     narratives, scores = {}, {}
     if args.score:
         key = api_key
@@ -900,6 +904,9 @@ def main(argv=None):
                 done += 1
                 save(out / "decision_exchanges.json", decisions)
                 print(f"[decisions {done}/{total}] {session['id']}", file=sys.stderr)
+        trajectory = trajectory_mod.build(evidence["sessions"], decisions)
+        save(out / "trajectory.json", trajectory)
+        (out / "trajectory.html").write_text(trajectory_mod.render_html(trajectory), encoding="utf-8")
 
         def review_one(group):
             try:
@@ -980,9 +987,10 @@ def main(argv=None):
     person["prompt_profile"] = args.prompt_profile
     save(out / "person_profile.json", person)
     (out / "codex-trajectories.html").write_text(render_codex_trajectories(evidence), encoding="utf-8")
-    (out / "report.html").write_text(render_html(evidence, groups, episodes, narratives, scores, decisions, reviews, diffs, person), encoding="utf-8")
+    (out / "report.html").write_text(render_html(evidence, groups, episodes, narratives, scores, decisions, reviews, diffs, person, trajectory=True), encoding="utf-8")
     print(f"Sessions {len(evidence['sessions'])}; commit groups {len(groups)}; episodes {len(episodes)}")
     print(f"Report: {out / 'report.html'}")
+    print(f"Trajectory: {out / 'trajectory.html'}")
     return 0
 
 
