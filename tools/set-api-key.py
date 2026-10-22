@@ -18,9 +18,10 @@ DEFAULT_DIR = Path(os.getenv("XDG_CONFIG_HOME") or (Path.home() / ".config")) / 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Store a model API key locally (mode 600, outside the repository)")
-    parser.add_argument("--provider", choices=("glm", "ark"), default="ark")
+    parser.add_argument("--provider", choices=("ark",), default="ark",
+                        help="Only ark (火山方舟) is supported")
     parser.add_argument("--path", type=Path, default=None,
-                        help="key file path (default: ~/.config/paxel-test/{provider}_api_key)")
+                        help="key file path (default: ~/.config/paxel-test/ark_api_key)")
     args = parser.parse_args()
 
     target = (args.path or DEFAULT_DIR / f"{args.provider}_api_key").expanduser()

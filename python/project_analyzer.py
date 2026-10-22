@@ -3,7 +3,7 @@
 """Independent project-level AI coding history analyzer.
 
 Reads local Codex and Claude JSONL, links sessions to one workspace, records a
-normalized event timeline, and prepares bounded evidence for optional GLM
+normalized event timeline, and prepares bounded evidence for optional model
 assessment. This is not Paxel code or an official Paxel score.
 """
 
@@ -29,13 +29,9 @@ AXES = {
     "verification": "验证意识",
     "reflection": "复盘与判断",
 }
-GLM_ENDPOINTS = {
-    "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
-}
 ARK_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
 ARK_DEFAULT_MODEL = "doubao-seed-2-1-pro-260915"
-MODEL_ENDPOINTS = GLM_ENDPOINTS | {ARK_ENDPOINT}
+MODEL_ENDPOINTS = {ARK_ENDPOINT}
 SECRETS = [
     (re.compile(r"\b[0-9a-fA-F]{32}\.[A-Za-z0-9_-]{12,}\b"), "[REDACTED_KEY]"),
     (re.compile(r"(?i)\b(?:sk|yk|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{12,}\b"), "[REDACTED_KEY]"),
@@ -589,7 +585,7 @@ Return only JSON: {summary, strengths:[str], limitations:[str], scores:{axis:{sc
 Use concise Chinese."""
 
 
-def call_glm(model_input, key, model, endpoint, system_prompt=SYSTEM_PROMPT):
+def call_model(model_input, key, model, endpoint, system_prompt=SYSTEM_PROMPT):
     if endpoint not in MODEL_ENDPOINTS:
         raise ValueError("Endpoint must be an approved Chat Completions URL")
     body = json.dumps({"model": model, "stream": False,
@@ -636,7 +632,7 @@ def call_glm(model_input, key, model, endpoint, system_prompt=SYSTEM_PROMPT):
     return assessment
 
 
-def score_project(model_input, key, model, endpoint, batch_output=None, scorer=call_glm):
+def score_project(model_input, key, model, endpoint, batch_output=None, scorer=call_model):
     batches = make_batches(model_input)
     assessments = []
     for batch in batches:
@@ -700,22 +696,17 @@ def main(argv=None):
     parser.add_argument("--batch-assessments", type=Path, default=Path("project-batch-assessments.json"))
     parser.add_argument("--report", type=Path, default=Path("project-report.html"))
     parser.add_argument("--score", action="store_true")
-    parser.add_argument("--provider", choices=("glm", "ark"), default="ark")
+    parser.add_argument("--provider", choices=("ark",), default="ark",
+                        help="Only ark (火山方舟) is supported; GLM support was removed")
     parser.add_argument("--model")
     parser.add_argument("--endpoint")
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days must be positive")
-    if args.provider == "ark":
-        args.model = args.model or ARK_DEFAULT_MODEL
-        args.endpoint = args.endpoint or ARK_ENDPOINT
-        if args.endpoint != ARK_ENDPOINT:
-            parser.error("Ark endpoint must be " + ARK_ENDPOINT)
-    else:
-        args.model = args.model or "glm-5.3"
-        args.endpoint = args.endpoint or "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-        if args.endpoint not in GLM_ENDPOINTS:
-            parser.error("GLM endpoint must be an official GLM Chat Completions URL")
+    args.model = args.model or ARK_DEFAULT_MODEL
+    args.endpoint = args.endpoint or ARK_ENDPOINT
+    if args.endpoint != ARK_ENDPOINT:
+        parser.error("Ark endpoint must be " + ARK_ENDPOINT)
     project = canonical_project(args.project)
     evidence = collect(project, args.days, args.codex_dir, args.claude_dir)
     if not evidence["sessions"]:
@@ -726,7 +717,7 @@ def main(argv=None):
     save_json(args.model_input, model_input)
     assessment = None
     if args.score:
-        env_name = "ARK_API_KEY" if args.provider == "ark" else "GLM_API_KEY"
+        env_name = "ARK_API_KEY"
         key = os.getenv(env_name)
         if not key:
             print(f"{env_name} is not set; no request sent", file=sys.stderr)

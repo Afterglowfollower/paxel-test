@@ -7,8 +7,9 @@ const path = require('node:path');
 
 const cli = path.resolve(__dirname, '..', 'python', 'paxel_reproduction.py');
 const raw = process.argv.slice(2);
+const has = (name) => raw.includes(name) || raw.some((arg) => arg.startsWith(`${name}=`));
 
-if (raw.includes('--help') || raw.includes('-h')) {
+if (has('--help') || has('-h')) {
   console.log(`paxel-test: 在本机分析 AI 编程会话并生成 HTML 报告
 
 用法:
@@ -17,7 +18,8 @@ if (raw.includes('--help') || raw.includes('-h')) {
   npx --yes github:Afterglowfollower/paxel-test --project /path/to/project
 
 默认读取 ~/.claude/projects 下最近 90 天的全部 Claude Code 会话。
-默认使用火山方舟生成模型评价，需要 ARK_API_KEY 或本地 key 文件。加 --no-score 只生成本地证据报告。
+没有 API Key 时自动只生成本地证据报告（不调用模型，不需要任何密钥）。
+有 ARK_API_KEY 或 --relay 时才会追加模型评价。
 
 选项:
   --project PATH       只分析一个项目，可同时读取该项目的 Codex/Claude 会话和 Git
@@ -32,9 +34,10 @@ if (raw.includes('--help') || raw.includes('-h')) {
   --concurrency N      模型调用并发数，默认 4；1 = 串行
   --days N             分析最近 N 天，默认 90
   --output-dir PATH    报告目录，默认 ./paxel-report
-  --score              强制调用所选服务商；需要对应 API Key
-  --provider NAME      ark（默认，火山方舟）或 glm（兼容旧配置）
-  --api-key-file PATH  从指定文件读取 key（默认 ~/.config/paxel-test/{provider}_api_key）
+  --score              强制调用模型；需要 ARK_API_KEY 或 --relay
+  --api-key-file PATH  从指定文件读取 key（默认 ~/.config/paxel-test/ark_api_key）
+  --relay URL          走共享中转，不需要本地 key；令牌用 PAXEL_RELAY_TOKEN 提供
+  --request-timeout N  单次模型请求超时秒数，默认 240
   --prompt-profile P   local（默认）或 v15-v5（需先运行 tools/extract-v15-prompts.sh）
   --no-score           只生成本地证据报告，不调用模型
   --model NAME         模型 ID；方舟默认 doubao-seed-2-1-pro-260915
@@ -50,7 +53,6 @@ let noScore = false;
 let hasOutputDir = false;
 let hasScore = false;
 let apiKeyFile = null;
-let provider = 'ark';
 for (let i = 0; i < raw.length; i += 1) {
   const arg = raw[i];
   if (arg === '--project') {
@@ -61,16 +63,6 @@ for (let i = 0; i < raw.length; i += 1) {
     project = raw[++i];
   } else if (arg === '--no-score') {
     noScore = true;
-  } else if (arg === '--provider') {
-    if (!raw[i + 1]) {
-      console.error('--provider 需要 glm 或 ark');
-      process.exit(2);
-    }
-    provider = raw[++i];
-    args.push('--provider', provider);
-  } else if (arg.startsWith('--provider=')) {
-    provider = arg.slice('--provider='.length);
-    args.push(arg);
   } else if (arg === '--api-key-file') {
     if (!raw[i + 1]) {
       console.error('--api-key-file 需要一个文件路径');
@@ -87,19 +79,14 @@ for (let i = 0; i < raw.length; i += 1) {
     args.push(arg);
   }
 }
-if (!['glm', 'ark'].includes(provider)) {
-  console.error('--provider 需要 glm 或 ark');
-  process.exit(2);
-}
 
 function defaultApiKeyFile() {
   const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  return path.join(base, 'paxel-test', `${provider}_api_key`);
+  return path.join(base, 'paxel-test', 'ark_api_key');
 }
 
 function apiKeyAvailable() {
-  const envName = provider === 'ark' ? 'ARK_API_KEY' : 'GLM_API_KEY';
-  if (process.env[envName] && process.env[envName].trim()) return true;
+  if (process.env.ARK_API_KEY && process.env.ARK_API_KEY.trim()) return true;
   const candidates = apiKeyFile ? [apiKeyFile] : [defaultApiKeyFile()];
   for (const file of candidates) {
     try {
@@ -112,39 +99,44 @@ function apiKeyAvailable() {
   return false;
 }
 
+const useRelay = has('--relay');
+
 if (project) {
   args.unshift(project);
-} else if (!args.includes('--all-claude') && !args.includes('--all-local')) {
+} else if (!has('--all-claude') && !has('--all-local')) {
   args.unshift('--all-claude');
 }
 if (!hasOutputDir) {
   args.push('--output-dir', path.resolve(process.cwd(), 'paxel-report'));
 }
+
+let scoring = false;
 if (noScore) {
   if (hasScore) {
     console.error('--score 和 --no-score 不能同时使用');
     process.exit(2);
   }
   args.push('--no-score');
+} else if (useRelay || apiKeyAvailable()) {
+  if (!hasScore) args.push('--score');
+  scoring = true;
+} else if (hasScore) {
+  console.error('模型评价需要 ARK_API_KEY 或 --relay。可以：\n' +
+    '  1) 设置 ARK_API_KEY 环境变量\n' +
+    '  2) python3 tools/set-api-key.py\n' +
+    '  3) --api-key-file /path/to/key\n' +
+    '  4) --relay https://你的中转地址（不需要本地 key）\n' +
+    '只想生成本地证据报告，去掉 --score 或加 --no-score。');
+  process.exit(2);
 } else {
-  if (!apiKeyAvailable()) {
-    const envName = provider === 'ark' ? 'ARK_API_KEY' : 'GLM_API_KEY';
-    console.error(`模型评价需要 ${envName}。可以：\n` +
-      `  1) 设置 ${envName} 环境变量\n` +
-      `  2) python3 tools/set-api-key.py --provider ${provider}\n` +
-      '  3) --api-key-file /path/to/key\n' +
-      '只想生成本地证据报告，加 --no-score。');
-    process.exit(2);
-  }
-  if (!hasScore) {
-    args.push('--score');
-    hasScore = true;
-  }
+  args.push('--no-score');
 }
 
+const target = useRelay ? '共享中转（key 由中转服务持有）' : '火山方舟';
+console.log(scoring
+  ? `正在生成模型评价报告。会话片段将发送到 ${target}。`
+  : '正在生成本地证据报告（未调用模型，不需要 API Key）。');
 const python = process.env.PAXEL_PYTHON || 'python3';
-console.log(hasScore ? `正在生成模型评价报告。会话片段将发送到 ${provider === 'ark' ? '火山方舟' : 'GLM'} API。`
-                     : '正在生成本地证据报告（未调用模型）。');
 const result = spawnSync(python, [cli, ...args], { stdio: 'inherit', env: process.env });
 if (result.error) {
   console.error(`无法启动 ${python}: ${result.error.message}`);

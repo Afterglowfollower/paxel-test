@@ -4,7 +4,7 @@
 
 No network and no model calls: fake callers return the shapes the official
 prompts ask for, so the wiring (message construction, JSON parsing, axis
-handling) is checked before spending GLM quota.
+handling) is checked before spending model quota.
 
     python3 tools/smoke-prompt-profiles.py
 """

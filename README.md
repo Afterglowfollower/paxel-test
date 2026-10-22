@@ -8,7 +8,7 @@
 - Python 3.9+
 - Git
 - 可选：`zstandard`（读取 DeepSeek harness 的 `.zstd` 日志；`python3 -m pip install zstandard`）
-- 模型评价默认使用火山方舟，需要 `ARK_API_KEY` 或本地 key 文件；只想生成本地证据报告时加 `--no-score`，无需 Key
+- 模型评价使用火山方舟，需要 `ARK_API_KEY` 或 `--relay`；两者都没有时自动只生成本地证据报告，不需要任何密钥
 
 ## Key 放哪里（不暴露到 GitHub）
 
@@ -44,7 +44,7 @@ python3 tools/set-api-key.py
 npx --yes github:Afterglowfollower/paxel-test --all-local
 ```
 
-也可设置 `ARK_API_KEY` 环境变量或用 `--api-key-file /私有路径/key`。默认请求地址为北京区域的 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`。旧的 GLM 配置只在显式传入 `--provider glm` 时使用。
+也可设置 `ARK_API_KEY` 环境变量或用 `--api-key-file /私有路径/key`。默认请求地址为北京区域的 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`。GLM 支持已移除，`--provider` 只接受 `ark`。
 
 ## 使用方式
 
@@ -115,9 +115,10 @@ npx --yes github:Afterglowfollower/paxel-test --all-local --sources claude,codex
 | `--sources LIST` | 逗号分隔的来源过滤，默认全部 |
 | `--days N` | 最近 N 天，默认 90 |
 | `--output-dir PATH` | 报告目录；Node 入口默认 `./paxel-report`，Python 入口默认 `./paxel-reproduction` |
-| `--score` / `--no-score` | 默认调用模型评价（需要 Key 或本地 key 文件）；`--no-score` 只做本地证据报告，Node 和 Python 入口都支持 |
-| `--api-key-file PATH` | 从指定文件读取 key；默认按服务商读取 `~/.config/paxel-test/{provider}_api_key` |
-| `--provider ark\|glm` | 模型服务商，默认 `ark`；`glm` 仅用于兼容旧配置 |
+| `--score` / `--no-score` | 有 Key 或 `--relay` 时默认调用模型评价；`--no-score` 只做本地证据报告；两者都没有时自动降级为本地报告 |
+| `--api-key-file PATH` | 从指定文件读取 key；默认 `~/.config/paxel-test/ark_api_key` |
+| `--relay URL` | 走共享中转，不需要本地 key；令牌由 `PAXEL_RELAY_TOKEN` 或 `--relay-token` 提供 |
+| `--request-timeout N` | 单次模型请求超时秒数，默认 240 |
 | `--model NAME` | 模型 ID；方舟默认 `doubao-seed-2-1-pro-260915`，可改为已开通的模型 ID |
 | `--concurrency N` | 模型调用并发数，默认 4；`1` 为串行 |
 | `--max-parts N` | 跳过需要超过 N 段叙事的超大会话，默认 0（不限制） |
@@ -132,6 +133,59 @@ python3 python/paxel_reproduction.py --all-local --days 90 --score --concurrency
   --output-dir /你的/私有输出目录
 ```
 
+## 让别人也能跑（不暴露你的 Key）
+
+两种方式都不需要把你的 key 交给别人。
+
+### 方式一：无 key 本地模式（默认行为）
+
+任何人拿到仓库直接跑，不传 `--score` 就不会有任何模型调用：
+
+```bash
+npx --yes github:Afterglowfollower/paxel-test --all-local
+```
+
+产物是完整的 `report.html` / `trajectory.html`，只缺五维评分的模型判断。想要模型评价的人自己准备 key 即可。
+
+### 方式二：共享中转（用你的额度，但 key 不外泄）
+
+`relay/server.js` 是一个零依赖转发服务：真实 key 只存在于该进程的环境变量里，调用方拿到的是**可吊销的共享令牌**，并且所有请求都受限额约束。
+
+服务端：
+
+```bash
+RELAY_TOKEN='公开令牌1,公开令牌2' \
+ARK_API_KEY='你的真实 key' \
+RELAY_PORT=8787 \
+node relay/server.js
+```
+
+生产环境请放在 HTTPS 反向代理后面（Nginx / Caddy / 云负载均衡），并只暴露这一个路径。
+
+调用方：
+
+```bash
+PAXEL_RELAY_TOKEN='公开令牌1' \
+npx --yes github:Afterglowfollower/paxel-test --all-local --relay https://relay.example.com
+```
+
+限额参数：
+
+| 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `RELAY_DAILY_REQUESTS` | 500 | 全局每日请求上限，到顶直接拒绝 |
+| `RELAY_PER_IP_HOURLY` | 20 | 单 IP 每小时上限 |
+| `RELAY_CONCURRENCY` | 4 | 同时进行中的上游调用数 |
+| `RELAY_MAX_TOKENS` | 8192 | 强制夹紧 `max_tokens` |
+| `RELAY_TIMEOUT_MS` | 600000 | 上游超时 |
+| `RELAY_MODEL` | 空 | 强制所有调用使用指定模型 |
+| `RELAY_UPSTREAM` | 方舟北京 | 上游地址，必须 https（loopback 例外） |
+| `RELAY_MAX_BODY_BYTES` | 524288 | 请求体上限 |
+
+`GET /healthz` 返回当日用量与并发占用，可用于探活。
+
+**需要清楚的风险**：共享令牌是公开的，谁都能用；上限只能约束总额，不能阻止别人把它刷满。要止损就从 `RELAY_TOKEN` 里删掉对应令牌并重启。中转只代理 `POST /v1/chat/completions`，不接受调用方指定上游，`stream` 被强制关闭，调用方也无法自带 token 预算。
+
 ## 模型评价
 
 默认使用火山方舟，需要 `ARK_API_KEY` 或本地方舟 key 文件。同一条命令会先提取会话叙事和工作片段证据，再基于全部已分析片段生成**一份针对人的综合评价**。报告层次包括：一句总体判断、构建者类型、AI 协作方式、做过什么、决策模式、优势、成长点、五维评价依据和判断边界。逐片段结果只留在 JSON 里供审计，不逐条呈现在报告页面。
@@ -141,7 +195,7 @@ export ARK_API_KEY='在你自己电脑上设置的新 Key'
 npx --yes github:Afterglowfollower/paxel-test --all-local
 ```
 
-**没有方舟 Key 时会直接报错**，不会静默生成一份未评分报告；可以运行 `python3 tools/set-api-key.py` 保存方舟 key，或加 `--no-score` 只做本地证据分析。`--score` 和 `--no-score` 不能同时使用。请勿把 Key 写入命令行参数、仓库或聊天记录。
+没有 Key 时命令不会报错，而是自动只做本地证据分析并打印一行提示；只有**显式**加 `--score` 而没有可用的 Key 或 `--relay` 才会报错。可以运行 `python3 tools/set-api-key.py` 保存方舟 key，或加 `--no-score` 明确只做本地分析。`--score` 和 `--no-score` 不能同时使用。请勿把 Key 写入命令行参数、仓库或聊天记录。
 
 ## 报告什么时候出现
 
@@ -151,7 +205,7 @@ npx --yes github:Afterglowfollower/paxel-test --all-local
 | 默认 / `--score` | 所有模型阶段结束后写 | 完整人物报告 |
 | 中途中断 | 没有最终 HTML，但中间 JSON 保留 | `session_narratives.json`、`episode_scores.json` 等可续跑 |
 
-`--score` 期间每完成一个阶段会增量写 JSON；`report.html` 是最后一次性生成的。想先立刻看本地覆盖情况，可以先跑 `--no-score`，之后再跑 `--score`（需要 Key）覆盖成完整报告。没有 Key 且没加 `--no-score` 时，命令在解析参数阶段就会报错。
+`--score` 期间每完成一个阶段会增量写 JSON；`report.html` 是最后一次性生成的。想先立刻看本地覆盖情况，可以先跑 `--no-score`，之后再跑 `--score`（需要 Key）覆盖成完整报告。没有 Key 且没加 `--score` 时，命令自动走本地模式，不会报错。
 
 ## 事件轨迹（trajectory）
 

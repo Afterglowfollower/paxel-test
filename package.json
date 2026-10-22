@@ -12,6 +12,7 @@
     "README.md",
     "REVERSE_ENGINEERING.md",
     "LICENSE",
+    "relay/",
     "tools/"
   ],
   "engines": {

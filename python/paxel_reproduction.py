@@ -22,6 +22,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib import error as urlerror
 from urllib import request
+from urllib.parse import urlparse
 
 import project_analyzer as base
 import multi_agent_sources as multi
@@ -285,7 +286,11 @@ def link_episodes(groups, sessions):
     return episodes
 
 
-def glm_text(system, user, key, model, endpoint, attempts=2, timeout=240):
+REQUEST_TIMEOUT = 240
+
+
+def chat_text(system, user, key, model, endpoint, attempts=2, timeout=None):
+    timeout = REQUEST_TIMEOUT if timeout is None else timeout
     if endpoint not in base.MODEL_ENDPOINTS:
         raise ValueError("Endpoint must be an approved Chat Completions URL")
     body = json.dumps({"model": model, "stream": False, "max_tokens": 8192,
@@ -325,7 +330,7 @@ def parse_narrative(text):
 
 def narrate_session(session, key, model, endpoint, caller=None, profile="local", prompts=None,
                     max_parts=0):
-    caller = caller or glm_text
+    caller = caller or chat_text
     parts = transcript_parts(session)
     if not parts:
         return {"status": "no_evidence", "narrative": None, "intent": None, "parts": 0}
@@ -402,7 +407,7 @@ def episode_input(episode, groups, sessions, narratives, decisions=None, reviews
 
 
 def score_episode(data, key, model, endpoint, caller=None, profile="local", prompts=None):
-    caller = caller or glm_text
+    caller = caller or chat_text
     if not any(s["narrative"] for s in data["sessions"]):
         return {"status": "skipped_no_narrative", "scores": {axis: None for axis in AXES}}
     if profile == "v15-v5":
@@ -527,7 +532,7 @@ def synthesize_person(data, key, model, endpoint, caller=None):
                 "axis_assessments": {axis: {"score": None, "interpretation": "证据尚未分析", "episode_ids": []} for axis in AXES},
                 "scores": {axis: None for axis in AXES}, "confidence": None,
                 "limitations": ["缺少模型对跨会话行为和结果的综合判断。"]}
-    caller = caller or glm_text
+    caller = caller or chat_text
     raw = caller(PERSON_PROMPT, fenced(json.dumps(data, ensure_ascii=False)), key, model, endpoint)
     parsed = parse_json_object(raw)
     if not isinstance(parsed, dict) or not isinstance(parsed.get("axis_assessments"), dict):
@@ -697,17 +702,17 @@ def _parallel_map(items, worker, workers):
                 yield item, None, exc
 
 
-def default_api_key_file(provider="ark"):
+def default_api_key_file():
     base = Path(os.getenv("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-    return base / "paxel-test" / ("ark_api_key" if provider == "ark" else "glm_api_key")
+    return base / "paxel-test" / "ark_api_key"
 
 
-def resolve_api_key(path=None, provider="ark"):
-    """Resolve the selected provider's key from env or a local file."""
-    env = os.getenv("ARK_API_KEY" if provider == "ark" else "GLM_API_KEY")
+def resolve_api_key(path=None):
+    """Resolve the Ark key from the environment or a local file."""
+    env = os.getenv("ARK_API_KEY")
     if env and env.strip():
         return env.strip()
-    candidates = ([Path(path).expanduser()] if path else [default_api_key_file(provider)])
+    candidates = ([Path(path).expanduser()] if path else [default_api_key_file()])
     for candidate in candidates:
         try:
             if candidate.is_file():
@@ -717,6 +722,17 @@ def resolve_api_key(path=None, provider="ark"):
         except OSError:
             continue
     return None
+
+
+def relay_endpoint(url):
+    """Build the relay Chat Completions URL; plain HTTP only on loopback."""
+    cleaned = url.strip()
+    parsed = urlparse(cleaned)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("--relay must be an http(s) URL, for example https://relay.example.com")
+    if parsed.scheme == "http" and parsed.hostname not in ("127.0.0.1", "::1", "localhost"):
+        raise ValueError("--relay must use https unless it points at loopback")
+    return cleaned.rstrip("/") + "/v1/chat/completions"
 
 
 def main(argv=None):
@@ -750,33 +766,48 @@ def main(argv=None):
     parser.add_argument("--prompt-profile", choices=("local", "v15-v5"), default="local",
                         help="local: independent rubric (default); v15-v5: public 0.3.48.2 client prompts")
     parser.add_argument("--api-key-file", type=Path,
-                        help="Read the selected provider's key from this file")
-    parser.add_argument("--provider", choices=("glm", "ark"), default="ark")
-    parser.add_argument("--model", help="Model ID (default: doubao-seed-2-1-pro-260915 for Ark)")
-    parser.add_argument("--endpoint", help="Official Chat Completions URL for the selected provider")
+                        help="Read the Ark key from this file (default ~/.config/paxel-test/ark_api_key)")
+    parser.add_argument("--provider", choices=("ark",), default="ark",
+                        help="Only ark (火山方舟) is supported; GLM support was removed")
+    parser.add_argument("--relay", metavar="URL",
+                        help="Send model calls through a relay that holds the key; needs no local key")
+    parser.add_argument("--relay-token", default=os.getenv("PAXEL_RELAY_TOKEN"),
+                        help="Shared token for --relay (default: PAXEL_RELAY_TOKEN)")
+    parser.add_argument("--request-timeout", type=int, default=240,
+                        help="Per-attempt model request timeout in seconds (default 240)")
+    parser.add_argument("--model", help="Model ID (default: doubao-seed-2-1-pro-260915)")
+    parser.add_argument("--endpoint", help="Ark Chat Completions URL")
     args = parser.parse_args(argv)
+    global REQUEST_TIMEOUT
     if args.days < 1:
         parser.error("--days must be positive")
     if args.concurrency < 1:
         parser.error("--concurrency must be positive")
+    if args.request_timeout < 1:
+        parser.error("--request-timeout must be positive")
     if args.score and args.no_score:
         parser.error("--score and --no-score are mutually exclusive")
     if not args.score and not args.no_score:
         args.score = True
-    if args.provider == "ark":
-        args.model = args.model or base.ARK_DEFAULT_MODEL
+    REQUEST_TIMEOUT = args.request_timeout
+    args.model = args.model or base.ARK_DEFAULT_MODEL
+    if args.relay:
+        try:
+            args.endpoint = relay_endpoint(args.relay)
+        except ValueError as exc:
+            parser.error(str(exc))
+        base.MODEL_ENDPOINTS.add(args.endpoint)
+        api_key = (args.relay_token or "").strip() or None
+        if args.score and not api_key:
+            parser.error("--relay 需要共享令牌：设置 PAXEL_RELAY_TOKEN 或传 --relay-token")
+    else:
         args.endpoint = args.endpoint or base.ARK_ENDPOINT
         if args.endpoint != base.ARK_ENDPOINT:
             parser.error("Ark endpoint must be " + base.ARK_ENDPOINT)
-    else:
-        args.model = args.model or "glm-5.3"
-        args.endpoint = args.endpoint or "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-        if args.endpoint not in base.GLM_ENDPOINTS:
-            parser.error("GLM endpoint must be an official GLM Chat Completions URL")
-    api_key = resolve_api_key(args.api_key_file, args.provider)
-    if args.score and not api_key:
-        parser.error(f"{args.provider.upper()}_API_KEY is not set. Use the env var, run tools/set-api-key.py, "
-                     "pass --api-key-file, or use --no-score")
+        api_key = resolve_api_key(args.api_key_file)
+        if args.score and not api_key:
+            parser.error("ARK_API_KEY is not set. Use the env var, run tools/set-api-key.py, "
+                         "pass --api-key-file, or use --no-score")
     project = base.canonical_project(args.project)
     try:
         prompt_bundle = profiles.load(args.prompt_profile)
@@ -889,7 +920,7 @@ def main(argv=None):
                 return decisions[session["id"]]
             try:
                 return extra.classify_decisions(
-                    decisions[session["id"]], key, args.model, args.endpoint, glm_text,
+                    decisions[session["id"]], key, args.model, args.endpoint, chat_text,
                     profile=args.prompt_profile, prompts=prompt_bundle)
             except Exception:
                 return decisions[session["id"]]
@@ -910,7 +941,7 @@ def main(argv=None):
 
         def review_one(group):
             try:
-                return extra.review_diff(diffs[group["id"]], key, args.model, args.endpoint, glm_text)
+                return extra.review_diff(diffs[group["id"]], key, args.model, args.endpoint, chat_text)
             except Exception as exc:
                 result = dict(reviews[group["id"]])
                 result["review_error"] = type(exc).__name__
