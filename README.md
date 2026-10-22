@@ -93,6 +93,11 @@ npx --yes github:Afterglowfollower/paxel-test \
 
 如果 PR diff 已经在本地导出，可加 `--pr-diff-dir /目录`（文件名为 `pr-42.diff`），或用 `--base-ref main` 读取本地 `refs/pull/N/head`。工具不会为了补 diff 自动联网。
 
+`--project` 命中会话有两种方式：会话的工作目录在该项目下（含指定子目录时的整个 Git 仓库），
+或者会话里的工具调用改动过该项目下的文件。后者用于"从父目录启动、后来才进入子项目"的情形，
+命中数量会记在 `evidence.json` 的 `coverage.matched_by_touched_path` 里，单个会话的命中方式见
+`sessions[].matched_by`。
+
 ### 3. 单来源（单个 harness）
 
 ```bash

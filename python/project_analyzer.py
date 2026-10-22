@@ -156,6 +156,44 @@ def project_matches(cwd, project):
         return False
 
 
+def rows_mention_project(rows, marker):
+    """Cheap pre-filter: does any raw row mention the project path?
+
+    Runs before normalizing an otherwise-unmatched transcript so a project run
+    does not have to normalize every session in scope.
+    """
+    for row in rows:
+        try:
+            if marker in json.dumps(row, ensure_ascii=False):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def session_touches_project(session, project):
+    """True when a tool call in this session touched a path inside project.
+
+    A session started from a parent directory still belongs to the project when
+    it edited, read, or tested files under it.
+    """
+    cwd = session.get("cwd") or str(project)
+    for event in session.get("events", []):
+        for raw in event.get("paths") or ():
+            if not isinstance(raw, str) or not raw:
+                continue
+            candidate = Path(raw).expanduser()
+            if not candidate.is_absolute():
+                candidate = Path(cwd) / candidate
+            try:
+                resolved = candidate.resolve()
+            except (OSError, ValueError):
+                continue
+            if resolved == project or project in resolved.parents:
+                return True
+    return False
+
+
 def session_files(codex_dir, claude_dir):
     for source, root in (("codex", Path(codex_dir).expanduser()), ("claude", Path(claude_dir).expanduser())):
         if not root.is_dir():
@@ -362,6 +400,7 @@ def merge_session_segments(segments):
                        "parent_id": next((s["parent_id"] for s in parts if s["parent_id"]), None),
                        "started_at": first, "ended_at": last, "event_count": len(events),
                        "source_file_count": len(parts), "empty_transcript": not events,
+                       "matched_by": next((p["matched_by"] for p in parts if p.get("matched_by")), "cwd"),
                        "source_paths": list(dict.fromkeys(path for part in parts for path in part.get("source_paths", []))),
                        "events": events})
     return merged
@@ -413,6 +452,7 @@ def collect(project, days, codex_dir, claude_dir, extra_sessions=None):
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     sessions = []
     files_seen = 0
+    touched_matches = 0
     source_files = Counter()
     for source, path in session_files(codex_dir, claude_dir):
         files_seen += 1
@@ -420,10 +460,18 @@ def collect(project, days, codex_dir, claude_dir, extra_sessions=None):
         cwd, sid, parent = session_identity(source, rows, path)
         if source == "claude" and not cwd:
             cwd = infer_claude_cwd(path)
+        matched_by_touched = False
         if not project_matches(cwd, project):
-            continue
+            if not rows_mention_project(rows, str(project)):
+                continue
+            matched_by_touched = True
         session = normalize_session(source, path, rows, cwd, sid, parent, cutoff)
         if session:
+            if matched_by_touched and not session_touches_project(session, project):
+                continue
+            session["matched_by"] = "touched_path" if matched_by_touched else "cwd"
+            if matched_by_touched:
+                touched_matches += 1
             sessions.append(session)
             source_files[source] += 1
     matched_files = len(sessions)
@@ -448,6 +496,7 @@ def collect(project, days, codex_dir, claude_dir, extra_sessions=None):
             "project_path": str(project), "generated_at": iso(datetime.now(timezone.utc)),
             "window_days": days, "coverage": {"files_scanned": files_seen, "matched_files": matched_files,
             "matched_sessions": len(sessions), "sources": dict(Counter(s["source"] for s in sessions)),
+            "matched_by_touched_path": touched_matches,
             "events": len(all_events), "user_messages": len(users),
             "tool_calls": len(tool_calls), "tool_results": sum(e["kind"] == "tool_result" for e in all_events),
             "test_like_calls": len(test_calls), "steering_candidates": len(steering),
