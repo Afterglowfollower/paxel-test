@@ -33,6 +33,8 @@ GLM_ENDPOINTS = {
     "https://open.bigmodel.cn/api/paas/v4/chat/completions",
     "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
 }
+ARK_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+MODEL_ENDPOINTS = GLM_ENDPOINTS | {ARK_ENDPOINT}
 SECRETS = [
     (re.compile(r"\b[0-9a-fA-F]{32}\.[A-Za-z0-9_-]{12,}\b"), "[REDACTED_KEY]"),
     (re.compile(r"(?i)\b(?:sk|yk|ghp|gho|github_pat)[-_][A-Za-z0-9_-]{12,}\b"), "[REDACTED_KEY]"),
@@ -586,8 +588,8 @@ Use concise Chinese."""
 
 
 def call_glm(model_input, key, model, endpoint, system_prompt=SYSTEM_PROMPT):
-    if endpoint not in GLM_ENDPOINTS:
-        raise ValueError("Endpoint must be one of the official GLM Chat Completions URLs")
+    if endpoint not in MODEL_ENDPOINTS:
+        raise ValueError("Endpoint must be an approved Chat Completions URL")
     body = json.dumps({"model": model, "stream": False,
                        "messages": [{"role": "system", "content": system_prompt},
                                     {"role": "user", "content": json.dumps(model_input, ensure_ascii=False)}]},
@@ -696,11 +698,23 @@ def main(argv=None):
     parser.add_argument("--batch-assessments", type=Path, default=Path("project-batch-assessments.json"))
     parser.add_argument("--report", type=Path, default=Path("project-report.html"))
     parser.add_argument("--score", action="store_true")
-    parser.add_argument("--model", default="glm-5.3")
-    parser.add_argument("--endpoint", default="https://open.bigmodel.cn/api/paas/v4/chat/completions")
+    parser.add_argument("--provider", choices=("glm", "ark"), default="glm")
+    parser.add_argument("--model")
+    parser.add_argument("--endpoint")
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days must be positive")
+    if args.provider == "ark":
+        if args.score and not args.model:
+            parser.error("--provider ark requires --model with a model ID enabled in your Ark project")
+        args.endpoint = args.endpoint or ARK_ENDPOINT
+        if args.endpoint != ARK_ENDPOINT:
+            parser.error("Ark endpoint must be " + ARK_ENDPOINT)
+    else:
+        args.model = args.model or "glm-5.3"
+        args.endpoint = args.endpoint or "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+        if args.endpoint not in GLM_ENDPOINTS:
+            parser.error("GLM endpoint must be an official GLM Chat Completions URL")
     project = canonical_project(args.project)
     evidence = collect(project, args.days, args.codex_dir, args.claude_dir)
     if not evidence["sessions"]:
@@ -711,9 +725,10 @@ def main(argv=None):
     save_json(args.model_input, model_input)
     assessment = None
     if args.score:
-        key = os.getenv("GLM_API_KEY")
+        env_name = "ARK_API_KEY" if args.provider == "ark" else "GLM_API_KEY"
+        key = os.getenv(env_name)
         if not key:
-            print("GLM_API_KEY is not set; no request sent", file=sys.stderr)
+            print(f"{env_name} is not set; no request sent", file=sys.stderr)
             return 2
         assessment, _ = score_project(model_input, key, args.model, args.endpoint,
                                       args.batch_assessments)

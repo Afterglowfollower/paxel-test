@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Save the GLM API key in a local file outside the repository.
+"""Save a model provider API key in a local file outside the repository.
 
 The key is read with a hidden prompt and written with mode 600. The report
 tool resolves it automatically; the key is never printed, committed, or
@@ -13,17 +13,18 @@ import getpass
 import os
 from pathlib import Path
 
-DEFAULT_PATH = Path(os.getenv("XDG_CONFIG_HOME") or (Path.home() / ".config")) / "paxel-test" / "glm_api_key"
+DEFAULT_DIR = Path(os.getenv("XDG_CONFIG_HOME") or (Path.home() / ".config")) / "paxel-test"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Store the GLM API key locally (mode 600, outside the repository)")
+    parser = argparse.ArgumentParser(description="Store a model API key locally (mode 600, outside the repository)")
+    parser.add_argument("--provider", choices=("glm", "ark"), default="glm")
     parser.add_argument("--path", type=Path, default=None,
-                        help=f"key file path (default: {DEFAULT_PATH})")
+                        help="key file path (default: ~/.config/paxel-test/{provider}_api_key)")
     args = parser.parse_args()
 
-    target = (args.path or DEFAULT_PATH).expanduser()
-    key = getpass.getpass("GLM API key (input hidden): ").strip()
+    target = (args.path or DEFAULT_DIR / f"{args.provider}_api_key").expanduser()
+    key = getpass.getpass(f"{args.provider.upper()} API key (input hidden): ").strip()
     if not key:
         print("No key entered; nothing written.")
         return 2
