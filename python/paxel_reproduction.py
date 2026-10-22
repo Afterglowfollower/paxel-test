@@ -642,12 +642,12 @@ def _parallel_map(items, worker, workers):
                 yield item, None, exc
 
 
-def default_api_key_file(provider="glm"):
+def default_api_key_file(provider="ark"):
     base = Path(os.getenv("XDG_CONFIG_HOME") or (Path.home() / ".config"))
     return base / "paxel-test" / ("ark_api_key" if provider == "ark" else "glm_api_key")
 
 
-def resolve_api_key(path=None, provider="glm"):
+def resolve_api_key(path=None, provider="ark"):
     """Resolve the selected provider's key from env or a local file."""
     env = os.getenv("ARK_API_KEY" if provider == "ark" else "GLM_API_KEY")
     if env and env.strip():
@@ -696,8 +696,8 @@ def main(argv=None):
                         help="local: independent rubric (default); v15-v5: public 0.3.48.2 client prompts")
     parser.add_argument("--api-key-file", type=Path,
                         help="Read the selected provider's key from this file")
-    parser.add_argument("--provider", choices=("glm", "ark"), default="glm")
-    parser.add_argument("--model", help="Model ID (default: glm-5.3 for GLM; set explicitly for Ark)")
+    parser.add_argument("--provider", choices=("glm", "ark"), default="ark")
+    parser.add_argument("--model", help="Model ID (default: doubao-seed-2-1-pro-260915 for Ark)")
     parser.add_argument("--endpoint", help="Official Chat Completions URL for the selected provider")
     args = parser.parse_args(argv)
     if args.days < 1:
@@ -709,8 +709,7 @@ def main(argv=None):
     if not args.score and not args.no_score:
         args.score = True
     if args.provider == "ark":
-        if not args.model and args.score:
-            parser.error("--provider ark requires --model with a model ID enabled in your Ark project")
+        args.model = args.model or base.ARK_DEFAULT_MODEL
         args.endpoint = args.endpoint or base.ARK_ENDPOINT
         if args.endpoint != base.ARK_ENDPOINT:
             parser.error("Ark endpoint must be " + base.ARK_ENDPOINT)

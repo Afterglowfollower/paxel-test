@@ -8,15 +8,15 @@
 - Python 3.9+
 - Git
 - 可选：`zstandard`（读取 DeepSeek harness 的 `.zstd` 日志；`python3 -m pip install zstandard`）
-- 模型评价需要所选服务商的 API Key：默认 GLM，也支持火山方舟；只想生成本地证据报告时加 `--no-score`，无需 Key
+- 模型评价默认使用火山方舟，需要 `ARK_API_KEY` 或本地 key 文件；只想生成本地证据报告时加 `--no-score`，无需 Key
 
 ## Key 放哪里（不暴露到 GitHub）
 
-默认使用 GLM，按优先级解析：
+默认使用火山方舟，按优先级解析：
 
-1. 环境变量 `GLM_API_KEY`
+1. 环境变量 `ARK_API_KEY`
 2. `--api-key-file /path/to/key`
-3. 本地默认文件 `~/.config/paxel-test/glm_api_key`
+3. 本地默认文件 `~/.config/paxel-test/ark_api_key`
 
 推荐用隐藏输入保存到仓库外：
 
@@ -24,35 +24,34 @@
 python3 tools/set-api-key.py
 ```
 
-它会写入 `~/.config/paxel-test/glm_api_key`，权限 `600`，目录 `700`；工具会自动读取，不会把 key 写进报告、不会打印 key，也不在仓库里。
+它会写入 `~/.config/paxel-test/ark_api_key`，权限 `600`，目录 `700`；工具会自动读取，不会把 key 写进报告、不会打印 key，也不在仓库里。
 
 也可以指定路径：
 
 ```bash
-python3 tools/set-api-key.py --path /你的/私有目录/glm.key
-npx --yes github:Afterglowfollower/paxel-test --all-local --api-key-file /你的/私有目录/glm.key
+python3 tools/set-api-key.py --path /你的/私有目录/ark.key
+npx --yes github:Afterglowfollower/paxel-test --all-local --api-key-file /你的/私有目录/ark.key
 ```
 
 不要把 key 写进 README、提交到 git、或贴到聊天/issue 里；`.env`、`.env.*`、`*.key` 已经在 `.gitignore` 中，但仍建议放在仓库外。
 
-### 使用火山方舟
+### 方舟模型
 
-先在[火山方舟控制台](https://console.volcengine.com/ark/region:cn-beijing/apiKey?apikey=%7B%7D)取得 API Key，并确认要调用的模型已在对应项目中开通。方舟模式读取 `ARK_API_KEY`，或仓库外的默认文件 `~/.config/paxel-test/ark_api_key`；不会使用本机的 GLM key。
+先在[火山方舟控制台](https://console.volcengine.com/ark/region:cn-beijing/apiKey?apikey=%7B%7D)取得 API Key，并确认要调用的模型已在对应项目中开通。默认模型 ID 为 `doubao-seed-2-1-pro-260915`；若账号未开通该模型，用 `--model` 指定可调用的模型 ID。
 
 ```bash
-python3 tools/set-api-key.py --provider ark
-npx --yes github:Afterglowfollower/paxel-test --all-local \
-  --provider ark --model 你的方舟模型ID
+python3 tools/set-api-key.py
+npx --yes github:Afterglowfollower/paxel-test --all-local
 ```
 
-也可设置 `ARK_API_KEY` 环境变量或用 `--api-key-file /私有路径/key`。`--model` 填控制台中可调用的模型 ID；方舟模式必须指定它。默认请求地址为北京区域的 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`。项目仍支持原有 GLM 配置。
+也可设置 `ARK_API_KEY` 环境变量或用 `--api-key-file /私有路径/key`。默认请求地址为北京区域的 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`。旧的 GLM 配置只在显式传入 `--provider glm` 时使用。
 
 ## 使用方式
 
 ### 1. 全量：一条命令查全部
 
 ```bash
-export GLM_API_KEY='在你自己电脑上设置的新 Key'
+export ARK_API_KEY='在你自己电脑上设置的新 Key'
 npx --yes github:Afterglowfollower/paxel-test --all-local
 ```
 
@@ -109,8 +108,8 @@ npx --yes github:Afterglowfollower/paxel-test --all-local --sources claude,codex
 | `--output-dir PATH` | 报告目录；Node 入口默认 `./paxel-report`，Python 入口默认 `./paxel-reproduction` |
 | `--score` / `--no-score` | 默认调用模型评价（需要 Key 或本地 key 文件）；`--no-score` 只做本地证据报告，Node 和 Python 入口都支持 |
 | `--api-key-file PATH` | 从指定文件读取 key；默认按服务商读取 `~/.config/paxel-test/{provider}_api_key` |
-| `--provider glm\|ark` | 模型服务商，默认 `glm`；`ark` 为火山方舟 |
-| `--model NAME` | 模型 ID；GLM 默认 `glm-5.3`，方舟模式必须指定已开通的模型 ID |
+| `--provider ark\|glm` | 模型服务商，默认 `ark`；`glm` 仅用于兼容旧配置 |
+| `--model NAME` | 模型 ID；方舟默认 `doubao-seed-2-1-pro-260915`，可改为已开通的模型 ID |
 | `--concurrency N` | 模型调用并发数，默认 4；`1` 为串行 |
 | `--max-parts N` | 跳过需要超过 N 段叙事的超大会话，默认 0（不限制） |
 | `--prompt-profile local\|v15-v5` | prompt 基线，默认 `local` |
@@ -126,14 +125,14 @@ python3 python/paxel_reproduction.py --all-local --days 90 --score --concurrency
 
 ## 模型评价
 
-默认使用 GLM，需要 `GLM_API_KEY` 或本地 GLM key 文件；加 `--provider ark --model 你的方舟模型ID` 则调用火山方舟，需要 `ARK_API_KEY` 或本地方舟 key 文件。同一条命令会先提取会话叙事和工作片段证据，再基于全部已分析片段生成**一份针对人的综合评价**。报告层次包括：一句总体判断、构建者类型、AI 协作方式、做过什么、决策模式、优势、成长点、五维评价依据和判断边界。逐片段结果只留在 JSON 里供审计，不逐条呈现在报告页面。
+默认使用火山方舟，需要 `ARK_API_KEY` 或本地方舟 key 文件。同一条命令会先提取会话叙事和工作片段证据，再基于全部已分析片段生成**一份针对人的综合评价**。报告层次包括：一句总体判断、构建者类型、AI 协作方式、做过什么、决策模式、优势、成长点、五维评价依据和判断边界。逐片段结果只留在 JSON 里供审计，不逐条呈现在报告页面。
 
 ```bash
-export GLM_API_KEY='在你自己电脑上设置的新 Key'
+export ARK_API_KEY='在你自己电脑上设置的新 Key'
 npx --yes github:Afterglowfollower/paxel-test --all-local
 ```
 
-**没有所选服务商的 Key 时会直接报错**，不会静默生成一份未评分报告；可以运行 `python3 tools/set-api-key.py --provider ark` 保存方舟 key，或加 `--no-score` 只做本地证据分析。`--score` 和 `--no-score` 不能同时使用。请勿把 Key 写入命令行参数、仓库或聊天记录。
+**没有方舟 Key 时会直接报错**，不会静默生成一份未评分报告；可以运行 `python3 tools/set-api-key.py` 保存方舟 key，或加 `--no-score` 只做本地证据分析。`--score` 和 `--no-score` 不能同时使用。请勿把 Key 写入命令行参数、仓库或聊天记录。
 
 ## 报告什么时候出现
 
@@ -178,14 +177,14 @@ python3 tools/smoke-prompt-profiles.py
 - 范围太大时先缩 `--days 30` 或 `--sources hermes`；
 - 重跑会复用已完成的叙事/评分缓存，不会全部重算；
 - 只想看本地覆盖，用 `--no-score`，通常几十秒内出报告；
-- `glm-5.3` 是 reasoning 模型，换更快的模型（例如 `glm-4.5-flash`）会更快，但评分口径会变，建议先小样本对比。
+- 切换方舟模型会改变评分口径，建议先小样本对比。
 
 ## 数据边界
 
 | 模式 | 外部请求 | 说明 |
 | --- | --- | --- |
 | `--no-score` | 无模型请求 | 全程本地：读会话、读 Git、写报告；不向模型服务商发送内容，也不需要 Key |
-| 默认 / `--score` | 调用所选服务商 API | 把截断后的会话叙事、片段证据、决策候选发给 GLM 或火山方舟；服务商留存策略由服务商决定 |
+| 默认 / `--score` | 调用所选服务商 API | 把截断后的会话叙事、片段证据、决策候选发给火山方舟；服务商留存策略由服务商决定 |
 | Git | 只读本地 | 不 fetch、不 push、不拉远端 PR |
 | Hermes / opencode | SQLite 只读 | 不修改数据库 |
 
