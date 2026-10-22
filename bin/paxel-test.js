@@ -17,7 +17,7 @@ if (raw.includes('--help') || raw.includes('-h')) {
   npx --yes github:Afterglowfollower/paxel-test --project /path/to/project
 
 默认读取 ~/.claude/projects 下最近 90 天的全部 Claude Code 会话。
-默认使用 GLM 生成模型评价；也可通过 --provider ark 使用火山方舟。加 --no-score 只生成本地证据报告。
+默认使用火山方舟生成模型评价，需要 ARK_API_KEY 或本地 key 文件。加 --no-score 只生成本地证据报告。
 
 选项:
   --project PATH       只分析一个项目，可同时读取该项目的 Codex/Claude 会话和 Git
@@ -33,11 +33,11 @@ if (raw.includes('--help') || raw.includes('-h')) {
   --days N             分析最近 N 天，默认 90
   --output-dir PATH    报告目录，默认 ./paxel-report
   --score              强制调用所选服务商；需要对应 API Key
-  --provider NAME      glm（默认）或 ark（火山方舟）
+  --provider NAME      ark（默认，火山方舟）或 glm（兼容旧配置）
   --api-key-file PATH  从指定文件读取 key（默认 ~/.config/paxel-test/{provider}_api_key）
   --prompt-profile P   local（默认）或 v15-v5（需先运行 tools/extract-v15-prompts.sh）
   --no-score           只生成本地证据报告，不调用模型
-  --model NAME         模型 ID；GLM 默认 glm-5.3，方舟需指定已开通的模型 ID
+  --model NAME         模型 ID；方舟默认 doubao-seed-2-1-pro-260915
 
 报告在输出目录的 report.html。完整底层参数见 python/paxel_reproduction.py。
 `);
@@ -50,7 +50,7 @@ let noScore = false;
 let hasOutputDir = false;
 let hasScore = false;
 let apiKeyFile = null;
-let provider = 'glm';
+let provider = 'ark';
 for (let i = 0; i < raw.length; i += 1) {
   const arg = raw[i];
   if (arg === '--project') {

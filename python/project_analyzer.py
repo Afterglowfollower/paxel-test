@@ -34,6 +34,7 @@ GLM_ENDPOINTS = {
     "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
 }
 ARK_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+ARK_DEFAULT_MODEL = "doubao-seed-2-1-pro-260915"
 MODEL_ENDPOINTS = GLM_ENDPOINTS | {ARK_ENDPOINT}
 SECRETS = [
     (re.compile(r"\b[0-9a-fA-F]{32}\.[A-Za-z0-9_-]{12,}\b"), "[REDACTED_KEY]"),
@@ -698,15 +699,14 @@ def main(argv=None):
     parser.add_argument("--batch-assessments", type=Path, default=Path("project-batch-assessments.json"))
     parser.add_argument("--report", type=Path, default=Path("project-report.html"))
     parser.add_argument("--score", action="store_true")
-    parser.add_argument("--provider", choices=("glm", "ark"), default="glm")
+    parser.add_argument("--provider", choices=("glm", "ark"), default="ark")
     parser.add_argument("--model")
     parser.add_argument("--endpoint")
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days must be positive")
     if args.provider == "ark":
-        if args.score and not args.model:
-            parser.error("--provider ark requires --model with a model ID enabled in your Ark project")
+        args.model = args.model or ARK_DEFAULT_MODEL
         args.endpoint = args.endpoint or ARK_ENDPOINT
         if args.endpoint != ARK_ENDPOINT:
             parser.error("Ark endpoint must be " + ARK_ENDPOINT)
