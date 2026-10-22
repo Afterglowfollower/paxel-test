@@ -285,8 +285,8 @@ def link_episodes(groups, sessions):
 
 
 def glm_text(system, user, key, model, endpoint, attempts=2, timeout=240):
-    if endpoint not in base.GLM_ENDPOINTS:
-        raise ValueError("Endpoint must be one of the official GLM Chat Completions URLs")
+    if endpoint not in base.MODEL_ENDPOINTS:
+        raise ValueError("Endpoint must be an approved Chat Completions URL")
     body = json.dumps({"model": model, "stream": False, "max_tokens": 8192,
                        "messages": [{"role": "system", "content": system},
                                     {"role": "user", "content": user}]}, ensure_ascii=False).encode()
@@ -642,17 +642,17 @@ def _parallel_map(items, worker, workers):
                 yield item, None, exc
 
 
-def default_api_key_file():
+def default_api_key_file(provider="glm"):
     base = Path(os.getenv("XDG_CONFIG_HOME") or (Path.home() / ".config"))
-    return base / "paxel-test" / "glm_api_key"
+    return base / "paxel-test" / ("ark_api_key" if provider == "ark" else "glm_api_key")
 
 
-def resolve_api_key(path=None):
-    """Resolve the GLM key from env, an explicit file, or the local default file."""
-    env = os.getenv("GLM_API_KEY")
+def resolve_api_key(path=None, provider="glm"):
+    """Resolve the selected provider's key from env or a local file."""
+    env = os.getenv("ARK_API_KEY" if provider == "ark" else "GLM_API_KEY")
     if env and env.strip():
         return env.strip()
-    candidates = ([Path(path).expanduser()] if path else [default_api_key_file()])
+    candidates = ([Path(path).expanduser()] if path else [default_api_key_file(provider)])
     for candidate in candidates:
         try:
             if candidate.is_file():
@@ -689,15 +689,16 @@ def main(argv=None):
     parser.add_argument("--output-dir", type=Path, default=Path("paxel-reproduction"))
     parser.add_argument("--pr-diff-dir", type=Path, help="Directory containing pr-N.diff files exported locally")
     parser.add_argument("--base-ref", help="Git base ref for local refs/pull/N/head diffs")
-    parser.add_argument("--score", action="store_true", help="Generate session narratives and episode scores with GLM")
+    parser.add_argument("--score", action="store_true", help="Generate session narratives and episode scores with the selected provider")
     parser.add_argument("--no-score", action="store_true",
                         help="Only build the local evidence report; never call a model")
     parser.add_argument("--prompt-profile", choices=("local", "v15-v5"), default="local",
                         help="local: independent rubric (default); v15-v5: public 0.3.48.2 client prompts")
     parser.add_argument("--api-key-file", type=Path,
-                        help="Read the GLM key from this file (default: ~/.config/paxel-test/glm_api_key)")
-    parser.add_argument("--model", default="glm-5.3")
-    parser.add_argument("--endpoint", default="https://open.bigmodel.cn/api/paas/v4/chat/completions")
+                        help="Read the selected provider's key from this file")
+    parser.add_argument("--provider", choices=("glm", "ark"), default="glm")
+    parser.add_argument("--model", help="Model ID (default: glm-5.3 for GLM; set explicitly for Ark)")
+    parser.add_argument("--endpoint", help="Official Chat Completions URL for the selected provider")
     args = parser.parse_args(argv)
     if args.days < 1:
         parser.error("--days must be positive")
@@ -707,9 +708,20 @@ def main(argv=None):
         parser.error("--score and --no-score are mutually exclusive")
     if not args.score and not args.no_score:
         args.score = True
-    api_key = resolve_api_key(args.api_key_file)
+    if args.provider == "ark":
+        if not args.model and args.score:
+            parser.error("--provider ark requires --model with a model ID enabled in your Ark project")
+        args.endpoint = args.endpoint or base.ARK_ENDPOINT
+        if args.endpoint != base.ARK_ENDPOINT:
+            parser.error("Ark endpoint must be " + base.ARK_ENDPOINT)
+    else:
+        args.model = args.model or "glm-5.3"
+        args.endpoint = args.endpoint or "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+        if args.endpoint not in base.GLM_ENDPOINTS:
+            parser.error("GLM endpoint must be an official GLM Chat Completions URL")
+    api_key = resolve_api_key(args.api_key_file, args.provider)
     if args.score and not api_key:
-        parser.error("GLM_API_KEY is not set. Use the env var, run tools/set-api-key.py, "
+        parser.error(f"{args.provider.upper()}_API_KEY is not set. Use the env var, run tools/set-api-key.py, "
                      "pass --api-key-file, or use --no-score")
     project = base.canonical_project(args.project)
     try:
@@ -783,6 +795,7 @@ def main(argv=None):
                                if args.prompt_profile == "v15-v5" else [NARRATIVE_PROMPT, MERGE_PROMPT])
             digest = fingerprint({"input": narrative_inputs[session["id"]],
                                   "prompts": prompt_material, "model": args.model,
+                                  "endpoint": args.endpoint,
                                   "prompt_profile": args.prompt_profile})
             previous = previous_narratives.get(session["id"], {})
             if previous.get("status") == "generated" and previous.get("input_hash") == digest:
@@ -858,6 +871,7 @@ def main(argv=None):
             prompt_material = (prompt_bundle["scoring"]
                                if args.prompt_profile == "v15-v5" else SCORING_PROMPT)
             digest = fingerprint({"input": data, "prompt": prompt_material, "model": args.model,
+                                  "endpoint": args.endpoint,
                                   "prompt_profile": args.prompt_profile})
             previous = previous_scores.get(episode["id"], {})
             if previous.get("status") == "scored" and previous.get("input_hash") == digest:
@@ -886,6 +900,7 @@ def main(argv=None):
     save(out / "person_profile_input.json", aggregate_input)
     if args.score:
         digest = fingerprint({"input": aggregate_input, "prompt": PERSON_PROMPT, "model": args.model,
+                              "endpoint": args.endpoint,
                               "prompt_profile": args.prompt_profile})
         previous = read_json(out / "person_profile.json")
         if previous.get("status") == "scored" and previous.get("input_hash") == digest:
