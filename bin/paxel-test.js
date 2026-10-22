@@ -15,7 +15,7 @@ if (raw.includes('--help') || raw.includes('-h')) {
   npx --yes github:Afterglowfollower/paxel-test --project /path/to/project
 
 默认读取 ~/.claude/projects 下最近 90 天的全部 Claude Code 会话。
-有 GLM_API_KEY 时自动生成模型评价；没有时生成未评分的证据报告。
+默认需要 GLM_API_KEY 生成模型评价；没有 Key 会报错。加 --no-score 只生成本地证据报告。
 
 选项:
   --project PATH       只分析一个项目，可同时读取该项目的 Codex/Claude 会话和 Git
@@ -70,17 +70,21 @@ if (project) {
 if (!hasOutputDir) {
   args.push('--output-dir', path.resolve(process.cwd(), 'paxel-report'));
 }
-if (!noScore && !hasScore && process.env.GLM_API_KEY) {
-  args.push('--score');
-  hasScore = true;
-}
-if (noScore && hasScore) {
-  console.error('--score 和 --no-score 不能同时使用');
-  process.exit(2);
-}
-if (hasScore && !process.env.GLM_API_KEY) {
-  console.error('模型评价需要 GLM_API_KEY；也可以使用 --no-score 生成本地证据报告。');
-  process.exit(2);
+if (noScore) {
+  if (hasScore) {
+    console.error('--score 和 --no-score 不能同时使用');
+    process.exit(2);
+  }
+  args.push('--no-score');
+} else {
+  if (!process.env.GLM_API_KEY) {
+    console.error('模型评价默认需要 GLM_API_KEY。请先设置环境变量；如果只想生成本地证据报告，加 --no-score。');
+    process.exit(2);
+  }
+  if (!hasScore) {
+    args.push('--score');
+    hasScore = true;
+  }
 }
 
 const python = process.env.PAXEL_PYTHON || 'python3';

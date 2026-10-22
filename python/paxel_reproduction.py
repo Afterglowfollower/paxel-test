@@ -656,6 +656,8 @@ def main(argv=None):
     parser.add_argument("--pr-diff-dir", type=Path, help="Directory containing pr-N.diff files exported locally")
     parser.add_argument("--base-ref", help="Git base ref for local refs/pull/N/head diffs")
     parser.add_argument("--score", action="store_true", help="Generate session narratives and episode scores with GLM")
+    parser.add_argument("--no-score", action="store_true",
+                        help="Only build the local evidence report; never call a model")
     parser.add_argument("--prompt-profile", choices=("local", "v15-v5"), default="local",
                         help="local: independent rubric (default); v15-v5: public 0.3.48.2 client prompts")
     parser.add_argument("--model", default="glm-5.3")
@@ -665,6 +667,12 @@ def main(argv=None):
         parser.error("--days must be positive")
     if args.concurrency < 1:
         parser.error("--concurrency must be positive")
+    if args.score and args.no_score:
+        parser.error("--score and --no-score are mutually exclusive")
+    if not args.score and not args.no_score:
+        args.score = True
+    if args.score and not os.getenv("GLM_API_KEY"):
+        parser.error("GLM_API_KEY is required for model evaluation; set it or pass --no-score")
     project = base.canonical_project(args.project)
     try:
         prompt_bundle = profiles.load(args.prompt_profile)

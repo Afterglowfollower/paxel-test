@@ -8,13 +8,14 @@
 - Python 3.9+
 - Git
 - 可选：`zstandard`（读取 DeepSeek harness 的 `.zstd` 日志；`python3 -m pip install zstandard`）
-- 可选：`GLM_API_KEY`（生成模型评价；没有 Key 时只出本地证据报告）
+- `GLM_API_KEY`：默认生成模型评价需要；只想生成本地证据报告时加 `--no-score`，无需 Key
 
 ## 使用方式
 
 ### 1. 全量：一条命令查全部
 
 ```bash
+export GLM_API_KEY='在你自己电脑上设置的新 Key'
 npx --yes github:Afterglowfollower/paxel-test --all-local
 ```
 
@@ -28,7 +29,7 @@ npx --yes github:Afterglowfollower/paxel-test --all-local
 
 `--all-local` 会按每个会话的 `cwd` 找到对应 Git 仓库，收集时间窗内的本地提交，并按仓库分组、关联片段。不在 Git 仓库里的会话（例如临时工作目录）不会产生提交证据。
 
-默认输出到当前目录的 `paxel-report/report.html`。不带 `--all-local` 时，`npx` 入口默认只分析 Claude Code 最近 90 天。
+默认输出到当前目录的 `paxel-report/report.html`。不带 `--all-local` 时，`npx` 入口默认只分析 Claude Code 最近 90 天；只想看本地覆盖、不调用模型时，在命令末尾加 `--no-score`。
 
 ### 2. 单项目
 
@@ -69,7 +70,7 @@ npx --yes github:Afterglowfollower/paxel-test --all-local --sources claude,codex
 | `--sources LIST` | 逗号分隔的来源过滤，默认全部 |
 | `--days N` | 最近 N 天，默认 90 |
 | `--output-dir PATH` | 报告目录；Node 入口默认 `./paxel-report`，Python 入口默认 `./paxel-reproduction` |
-| `--score` / `--no-score` | 强制模型评价 / 强制只做本地证据报告（`--no-score` 是 Node 入口参数；Python 入口不写 `--score` 即可） |
+| `--score` / `--no-score` | 默认调用模型评价（需要 Key）；`--no-score` 只做本地证据报告，Node 和 Python 入口都支持 |
 | `--model NAME` | GLM 模型名，默认 `glm-5.3` |
 | `--concurrency N` | 模型调用并发数，默认 4；`1` 为串行 |
 | `--max-parts N` | 跳过需要超过 N 段叙事的超大会话，默认 0（不限制） |
@@ -86,24 +87,24 @@ python3 python/paxel_reproduction.py --all-local --days 90 --score --concurrency
 
 ## 模型评价
 
-设置 `GLM_API_KEY` 后，同一条命令会自动调用 GLM：先提取会话叙事和工作片段证据，再基于全部已分析片段生成**一份针对人的综合评价**。报告层次包括：一句总体判断、构建者类型、AI 协作方式、做过什么、决策模式、优势、成长点、五维评价依据和判断边界。逐片段结果只留在 JSON 里供审计，不逐条呈现在报告页面。
+默认要求设置 `GLM_API_KEY`：同一条命令会调用 GLM，先提取会话叙事和工作片段证据，再基于全部已分析片段生成**一份针对人的综合评价**。报告层次包括：一句总体判断、构建者类型、AI 协作方式、做过什么、决策模式、优势、成长点、五维评价依据和判断边界。逐片段结果只留在 JSON 里供审计，不逐条呈现在报告页面。
 
 ```bash
 export GLM_API_KEY='在你自己电脑上设置的新 Key'
 npx --yes github:Afterglowfollower/paxel-test --all-local
 ```
 
-没有 Key 时仍会生成**未评分**的本地覆盖报告，不会用会话数量或工具调用次数冒充能力评价。使用 `--no-score` 可强制只在本机处理；使用 `--score` 可明确要求模型评价。请勿把 Key 写入命令行参数、仓库或聊天记录。
+**没有 Key 时会直接报错**，不会静默生成一份未评分报告；如果这次只想做本地证据分析，加 `--no-score`。`--score` 和 `--no-score` 不能同时使用。请勿把 Key 写入命令行参数、仓库或聊天记录。
 
 ## 报告什么时候出现
 
 | 模式 | `report.html` 出现时机 | 内容 |
 | --- | --- | --- |
-| `--no-score`（或无 Key） | 本地解析完立即写，通常几秒到几十秒 | 证据/覆盖报告；人物评价留空 |
-| `--score` | 所有模型阶段结束后写 | 完整人物报告 |
+| `--no-score` | 本地解析完立即写，通常几秒到几十秒 | 证据/覆盖报告；人物评价留空 |
+| 默认 / `--score` | 所有模型阶段结束后写 | 完整人物报告 |
 | 中途中断 | 没有最终 HTML，但中间 JSON 保留 | `session_narratives.json`、`episode_scores.json` 等可续跑 |
 
-`--score` 期间每完成一个阶段会增量写 JSON；`report.html` 是最后一次性生成的。想先立刻看本地覆盖情况，可以先跑 `--no-score`，之后再跑 `--score` 覆盖成完整报告。
+`--score` 期间每完成一个阶段会增量写 JSON；`report.html` 是最后一次性生成的。想先立刻看本地覆盖情况，可以先跑 `--no-score`，之后再跑 `--score`（需要 Key）覆盖成完整报告。没有 Key 且没加 `--no-score` 时，命令在解析参数阶段就会报错。
 
 ## Prompt profile
 
@@ -144,8 +145,8 @@ python3 tools/smoke-prompt-profiles.py
 
 | 模式 | 外部请求 | 说明 |
 | --- | --- | --- |
-| `--no-score` | 无模型请求 | 全程本地：读会话、读 Git、写报告；不向 Paxel / YC / GLM 发送内容 |
-| `--score` | 调用 GLM API | 把截断后的会话叙事、片段证据、决策候选发给 GLM；服务商留存策略由服务商决定 |
+| `--no-score` | 无模型请求 | 全程本地：读会话、读 Git、写报告；不向 Paxel / YC / GLM 发送内容，也不需要 Key |
+| 默认 / `--score` | 调用 GLM API | 把截断后的会话叙事、片段证据、决策候选发给 GLM；服务商留存策略由服务商决定 |
 | Git | 只读本地 | 不 fetch、不 push、不拉远端 PR |
 | Hermes / opencode | SQLite 只读 | 不修改数据库 |
 
