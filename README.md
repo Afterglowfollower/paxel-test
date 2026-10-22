@@ -8,7 +8,32 @@
 - Python 3.9+
 - Git
 - 可选：`zstandard`（读取 DeepSeek harness 的 `.zstd` 日志；`python3 -m pip install zstandard`）
-- `GLM_API_KEY`：默认生成模型评价需要；只想生成本地证据报告时加 `--no-score`，无需 Key
+- `GLM_API_KEY` 或本地 key 文件：默认生成模型评价需要；只想生成本地证据报告时加 `--no-score`，无需 Key
+
+## Key 放哪里（不暴露到 GitHub）
+
+按优先级解析：
+
+1. 环境变量 `GLM_API_KEY`
+2. `--api-key-file /path/to/key`
+3. 本地默认文件 `~/.config/paxel-test/glm_api_key`
+
+推荐用隐藏输入保存到仓库外：
+
+```bash
+python3 tools/set-api-key.py
+```
+
+它会写入 `~/.config/paxel-test/glm_api_key`，权限 `600`，目录 `700`；工具会自动读取，不会把 key 写进报告、不会打印 key，也不在仓库里。
+
+也可以指定路径：
+
+```bash
+python3 tools/set-api-key.py --path /你的/私有目录/glm.key
+npx --yes github:Afterglowfollower/paxel-test --all-local --api-key-file /你的/私有目录/glm.key
+```
+
+不要把 key 写进 README、提交到 git、或贴到聊天/issue 里；`.env`、`.env.*`、`*.key` 已经在 `.gitignore` 中，但仍建议放在仓库外。
 
 ## 使用方式
 
@@ -70,7 +95,8 @@ npx --yes github:Afterglowfollower/paxel-test --all-local --sources claude,codex
 | `--sources LIST` | 逗号分隔的来源过滤，默认全部 |
 | `--days N` | 最近 N 天，默认 90 |
 | `--output-dir PATH` | 报告目录；Node 入口默认 `./paxel-report`，Python 入口默认 `./paxel-reproduction` |
-| `--score` / `--no-score` | 默认调用模型评价（需要 Key）；`--no-score` 只做本地证据报告，Node 和 Python 入口都支持 |
+| `--score` / `--no-score` | 默认调用模型评价（需要 Key 或本地 key 文件）；`--no-score` 只做本地证据报告，Node 和 Python 入口都支持 |
+| `--api-key-file PATH` | 从指定文件读取 GLM key；默认 `~/.config/paxel-test/glm_api_key` |
 | `--model NAME` | GLM 模型名，默认 `glm-5.3` |
 | `--concurrency N` | 模型调用并发数，默认 4；`1` 为串行 |
 | `--max-parts N` | 跳过需要超过 N 段叙事的超大会话，默认 0（不限制） |
@@ -87,14 +113,14 @@ python3 python/paxel_reproduction.py --all-local --days 90 --score --concurrency
 
 ## 模型评价
 
-默认要求设置 `GLM_API_KEY`：同一条命令会调用 GLM，先提取会话叙事和工作片段证据，再基于全部已分析片段生成**一份针对人的综合评价**。报告层次包括：一句总体判断、构建者类型、AI 协作方式、做过什么、决策模式、优势、成长点、五维评价依据和判断边界。逐片段结果只留在 JSON 里供审计，不逐条呈现在报告页面。
+默认要求设置 `GLM_API_KEY` 或本地 key 文件：同一条命令会调用 GLM，先提取会话叙事和工作片段证据，再基于全部已分析片段生成**一份针对人的综合评价**。报告层次包括：一句总体判断、构建者类型、AI 协作方式、做过什么、决策模式、优势、成长点、五维评价依据和判断边界。逐片段结果只留在 JSON 里供审计，不逐条呈现在报告页面。
 
 ```bash
 export GLM_API_KEY='在你自己电脑上设置的新 Key'
 npx --yes github:Afterglowfollower/paxel-test --all-local
 ```
 
-**没有 Key 时会直接报错**，不会静默生成一份未评分报告；如果这次只想做本地证据分析，加 `--no-score`。`--score` 和 `--no-score` 不能同时使用。请勿把 Key 写入命令行参数、仓库或聊天记录。
+**没有 Key 时会直接报错**，不会静默生成一份未评分报告；可以运行 `python3 tools/set-api-key.py` 保存到本地 key 文件，或加 `--no-score` 只做本地证据分析。`--score` 和 `--no-score` 不能同时使用。请勿把 Key 写入命令行参数、仓库或聊天记录。
 
 ## 报告什么时候出现
 

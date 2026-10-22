@@ -630,6 +630,28 @@ def _parallel_map(items, worker, workers):
                 yield item, None, exc
 
 
+def default_api_key_file():
+    base = Path(os.getenv("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return base / "paxel-test" / "glm_api_key"
+
+
+def resolve_api_key(path=None):
+    """Resolve the GLM key from env, an explicit file, or the local default file."""
+    env = os.getenv("GLM_API_KEY")
+    if env and env.strip():
+        return env.strip()
+    candidates = ([Path(path).expanduser()] if path else [default_api_key_file()])
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                value = candidate.read_text(encoding="utf-8").strip()
+                if value:
+                    return value
+        except OSError:
+            continue
+    return None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Reproduce three public Paxel client stages on local history")
     parser.add_argument("project", type=Path, nargs="?", default=Path("."))
@@ -660,6 +682,8 @@ def main(argv=None):
                         help="Only build the local evidence report; never call a model")
     parser.add_argument("--prompt-profile", choices=("local", "v15-v5"), default="local",
                         help="local: independent rubric (default); v15-v5: public 0.3.48.2 client prompts")
+    parser.add_argument("--api-key-file", type=Path,
+                        help="Read the GLM key from this file (default: ~/.config/paxel-test/glm_api_key)")
     parser.add_argument("--model", default="glm-5.3")
     parser.add_argument("--endpoint", default="https://open.bigmodel.cn/api/paas/v4/chat/completions")
     args = parser.parse_args(argv)
@@ -671,8 +695,10 @@ def main(argv=None):
         parser.error("--score and --no-score are mutually exclusive")
     if not args.score and not args.no_score:
         args.score = True
-    if args.score and not os.getenv("GLM_API_KEY"):
-        parser.error("GLM_API_KEY is required for model evaluation; set it or pass --no-score")
+    api_key = resolve_api_key(args.api_key_file)
+    if args.score and not api_key:
+        parser.error("GLM_API_KEY is not set. Use the env var, run tools/set-api-key.py, "
+                     "pass --api-key-file, or use --no-score")
     project = base.canonical_project(args.project)
     try:
         prompt_bundle = profiles.load(args.prompt_profile)
@@ -734,9 +760,7 @@ def main(argv=None):
     save(out / "narrative_inputs.json", narrative_inputs)
     narratives, scores = {}, {}
     if args.score:
-        key = os.getenv("GLM_API_KEY")
-        if not key:
-            parser.error("GLM_API_KEY is missing; no model request sent")
+        key = api_key
         previous_narratives = read_json(out / "session_narratives.json")
         lock = threading.Lock()
         narratives = {session["id"]: {} for session in evidence["sessions"]}

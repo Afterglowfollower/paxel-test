@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const cli = path.resolve(__dirname, '..', 'python', 'paxel_reproduction.py');
@@ -15,7 +17,7 @@ if (raw.includes('--help') || raw.includes('-h')) {
   npx --yes github:Afterglowfollower/paxel-test --project /path/to/project
 
 默认读取 ~/.claude/projects 下最近 90 天的全部 Claude Code 会话。
-默认需要 GLM_API_KEY 生成模型评价；没有 Key 会报错。加 --no-score 只生成本地证据报告。
+默认需要 GLM_API_KEY 或本地 key 文件生成模型评价；没有 Key 会报错。加 --no-score 只生成本地证据报告。
 
 选项:
   --project PATH       只分析一个项目，可同时读取该项目的 Codex/Claude 会话和 Git
@@ -30,7 +32,8 @@ if (raw.includes('--help') || raw.includes('-h')) {
   --concurrency N      模型调用并发数，默认 4；1 = 串行
   --days N             分析最近 N 天，默认 90
   --output-dir PATH    报告目录，默认 ./paxel-report
-  --score              强制调用 GLM；需要 GLM_API_KEY
+  --score              强制调用 GLM；需要 GLM_API_KEY 或本地 key 文件
+  --api-key-file PATH  从指定文件读取 GLM key（默认 ~/.config/paxel-test/glm_api_key）
   --prompt-profile P   local（默认）或 v15-v5（需先运行 tools/extract-v15-prompts.sh）
   --no-score           只生成本地证据报告，即使设置了 GLM_API_KEY
   --model NAME         GLM 模型名，默认 glm-5.3
@@ -45,6 +48,7 @@ let project = null;
 let noScore = false;
 let hasOutputDir = false;
 let hasScore = false;
+let apiKeyFile = null;
 for (let i = 0; i < raw.length; i += 1) {
   const arg = raw[i];
   if (arg === '--project') {
@@ -55,11 +59,40 @@ for (let i = 0; i < raw.length; i += 1) {
     project = raw[++i];
   } else if (arg === '--no-score') {
     noScore = true;
+  } else if (arg === '--api-key-file') {
+    if (!raw[i + 1]) {
+      console.error('--api-key-file 需要一个文件路径');
+      process.exit(2);
+    }
+    apiKeyFile = raw[++i];
+    args.push('--api-key-file', apiKeyFile);
+  } else if (arg.startsWith('--api-key-file=')) {
+    apiKeyFile = arg.slice('--api-key-file='.length);
+    args.push(arg);
   } else {
     if (arg === '--output-dir') hasOutputDir = true;
     if (arg === '--score') hasScore = true;
     args.push(arg);
   }
+}
+
+function defaultApiKeyFile() {
+  const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  return path.join(base, 'paxel-test', 'glm_api_key');
+}
+
+function apiKeyAvailable() {
+  if (process.env.GLM_API_KEY && process.env.GLM_API_KEY.trim()) return true;
+  const candidates = apiKeyFile ? [apiKeyFile] : [defaultApiKeyFile()];
+  for (const file of candidates) {
+    try {
+      if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').trim()) return true;
+    } catch (error) {
+      // Unreadable candidates are treated as absent; the Python resolver will
+      // produce the final error if none can be read.
+    }
+  }
+  return false;
 }
 
 if (project) {
@@ -77,8 +110,12 @@ if (noScore) {
   }
   args.push('--no-score');
 } else {
-  if (!process.env.GLM_API_KEY) {
-    console.error('模型评价默认需要 GLM_API_KEY。请先设置环境变量；如果只想生成本地证据报告，加 --no-score。');
+  if (!apiKeyAvailable()) {
+    console.error('模型评价默认需要 GLM_API_KEY。可以：\n' +
+      "  1) export GLM_API_KEY='...'\n" +
+      '  2) python3 tools/set-api-key.py  # 保存到 ~/.config/paxel-test/glm_api_key（600）\n' +
+      '  3) --api-key-file /path/to/key\n' +
+      '只想生成本地证据报告，加 --no-score。');
     process.exit(2);
   }
   if (!hasScore) {
