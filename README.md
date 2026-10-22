@@ -80,6 +80,15 @@ npx --yes github:Afterglowfollower/paxel-test \
   --project /绝对路径/你的项目 --sources opencode
 ```
 
+只看这个项目的 Codex 对话与 agent 调用轨迹，可先生成不调用模型的本地报告：
+
+```bash
+npx --yes github:Afterglowfollower/paxel-test \
+  --project /绝对路径/你的项目 --sources codex --no-score
+```
+
+打开 `paxel-report/report.html`，点击“查看 Codex 会话与 agent 调用轨迹”；也可直接打开 `paxel-report/codex-trajectories.html`。页面按父子会话展示消息、工具调用和结果，并列出原始 JSONL 路径。页面中的事件已脱敏、截断；需要完整内容时在本机查看列出的日志文件。`--project` 以 Git 仓库为单位，指定仓库内子目录仍会分析整个仓库。
+
 如果 PR diff 已经在本地导出，可加 `--pr-diff-dir /目录`（文件名为 `pr-42.diff`），或用 `--base-ref main` 读取本地 `refs/pull/N/head`。工具不会为了补 diff 自动联网。
 
 ### 3. 单来源（单个 harness）
@@ -188,7 +197,7 @@ python3 tools/smoke-prompt-profiles.py
 | Git | 只读本地 | 不 fetch、不 push、不拉远端 PR |
 | Hermes / opencode | SQLite 只读 | 不修改数据库 |
 
-发送给模型服务商前会做正则脱敏（token、key、路径、邮箱等），但这是**尽力而为，不是保证**。输出目录里的 `report.html`、`evidence.json`、`narrative_inputs.json` 都可能含私人会话，**不要提交、不要外发**。
+发送给模型服务商前会做正则脱敏（token、key、路径、邮箱等），但这是**尽力而为，不是保证**。输出目录里的 `report.html`、`codex-trajectories.html`、`evidence.json`、`narrative_inputs.json` 都可能含私人会话；轨迹页还列出本机原始日志路径，**不要提交、不要外发**。
 
 ## 报告与局限
 

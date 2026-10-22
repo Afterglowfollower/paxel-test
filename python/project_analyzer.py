@@ -329,12 +329,12 @@ def normalize_session(source, path, rows, cwd, session_id, parent_id, cutoff):
         return {"id": session_id, "source": source, "cwd": cwd,
                 "parent_id": parent_id, "started_at": iso(modified),
                 "ended_at": iso(modified), "event_count": 0,
-                "empty_transcript": True, "events": []}
+                "empty_transcript": True, "source_paths": [str(path.resolve())], "events": []}
     # IDs are assigned at parse time, stable across sorts and used as references.
     first, last = parse_time(events[0]["at"]), parse_time(events[-1]["at"])
     return {"id": session_id, "source": source, "cwd": cwd, "parent_id": parent_id,
             "started_at": iso(first), "ended_at": iso(last), "event_count": len(events),
-            "events": events}
+            "source_paths": [str(path.resolve())], "events": events}
 
 
 def merge_session_segments(segments):
@@ -366,6 +366,7 @@ def merge_session_segments(segments):
                        "parent_id": next((s["parent_id"] for s in parts if s["parent_id"]), None),
                        "started_at": first, "ended_at": last, "event_count": len(events),
                        "source_file_count": len(parts), "empty_transcript": not events,
+                       "source_paths": list(dict.fromkeys(path for part in parts for path in part.get("source_paths", []))),
                        "events": events})
     return merged
 
